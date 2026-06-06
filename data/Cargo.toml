@@ -1,0 +1,18 @@
+[package]
+name = "resonantdust-data"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust shared data-manipulation crate — pure logic (packing/unpacking, bit-field helpers, matcher) over bytes and rows passed in. No embedded catalog JSON. Linked as an rlib by the SpacetimeDB modules and wrapped by `resonantdust-wasm` for the client."
+
+[lib]
+name = "resonantdust_data"
+path = "src/lib.rs"
+# rlib only: the server links this directly; the browser gets it via the
+# `resonantdust-wasm` bindings crate, which is the cdylib.
+crate-type = ["rlib"]
+
+[dependencies]
+# Derive-only: lets the wasm bindings (and the gate's wire) serialize the value
+# types (Cell/Plan/Card). No runtime serde format is chosen here.
+serde = { version = "1", features = ["derive"] }

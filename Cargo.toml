@@ -1,0 +1,25 @@
+[workspace]
+members = ["data"]
+
+[package]
+name = "resonantdust-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust client-side wasm crate — DSL runtime and shared logic compiled to a browser bundle the pixijs client imports. The server does NOT consume this; it links the shared logic crates directly."
+
+[lib]
+name = "resonantdust_wasm"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Enable wasm-bindgen-annotated public API for browser consumption.
+js = ["dep:wasm-bindgen", "dep:serde_json"]
+
+[dependencies]
+resonantdust-data = { path = "data" }
+wasm-bindgen = { version = "0.2", optional = true }
+# JSON marshalling for the browser boundary only (the plain logic stays typed).
+serde_json = { version = "1", optional = true }
