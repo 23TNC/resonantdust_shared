@@ -426,8 +426,8 @@ pub fn card_flag_field_shape(field: &str, name: &str) -> Option<Vec<u8>> {
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = hasCardFlag)]
-pub fn has_card_flag(flags_state: u32, flags_bk: u32, name: &str) -> bool {
-    resonantdust_data::inspect::has_card_flag(flags_state, flags_bk, name)
+pub fn has_card_flag(flags: u32, flags_bk: u32, name: &str) -> bool {
+    resonantdust_data::inspect::has_card_flag(flags, flags_bk, name)
 }
 
 #[cfg(feature = "js")]
@@ -438,8 +438,8 @@ pub fn card_flag_field_value_in(field: &str, host: u32, name: &str) -> Option<u3
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagFieldValueAny)]
-pub fn card_flag_field_value_any(flags_state: u32, flags_bk: u32, name: &str) -> Option<u32> {
-    resonantdust_data::inspect::card_flag_field_value_any(flags_state, flags_bk, name)
+pub fn card_flag_field_value_any(flags: u32, stock: u32, name: &str) -> Option<u32> {
+    resonantdust_data::inspect::card_flag_field_value_any(flags, stock, name)
 }
 
 #[cfg(feature = "js")]

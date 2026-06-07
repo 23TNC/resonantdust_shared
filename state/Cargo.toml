@@ -1,0 +1,14 @@
+[package]
+name = "resonantdust-state"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust recipe binding state validation — existence / ownership / not-dead / holds / dedup checks over a CardStore. Depends on resonantdust-codec only, NOT the DSL. Lands the audited gameplay-state movers (views, synthetic-tile, effect semantics, stacking) next."
+
+[lib]
+name = "resonantdust_state"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+resonantdust-codec = { path = "../codec" }

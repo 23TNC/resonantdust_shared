@@ -1,0 +1,15 @@
+[package]
+name = "resonantdust-protocol"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust client↔gate wire protocol (JSON over the WS). Shared by the gateway (receives ClientMsg, sends GateMsg) and the client (the mirror)."
+
+[lib]
+name = "resonantdust_protocol"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -1,15 +1,15 @@
 [workspace]
-members = ["data"]
+members = ["codec", "protocol", "dsl", "state", "data"]
 
 [package]
-name = "resonantdust-wasm"
+name = "resonantdust-shared"
 version = "0.1.0"
 edition = "2021"
 publish = false
 description = "Resonant Dust client-side wasm crate — DSL runtime and shared logic compiled to a browser bundle the pixijs client imports. The server does NOT consume this; it links the shared logic crates directly."
 
 [lib]
-name = "resonantdust_wasm"
+name = "resonantdust_shared"
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 

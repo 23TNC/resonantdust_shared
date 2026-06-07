@@ -980,7 +980,7 @@ mod tests {
     let b = load(&[("a.rd".into(), aspects.into()), ("c.rd".into(), cards.into())]).expect("load");
     let hero = b.packed_def("hero").unwrap();
     // The mismatch the bug needs: type-local def_id 1, global index 3.
-    assert_eq!(crate::bits::unpack_def(hero).1, 1);
+    assert_eq!(resonantdust_codec::bits::unpack_def(hero).1, 1);
     assert_eq!(b.card_def_id("hero"), Some(3));
     assert_eq!(aspect_value(&b, hero, "inventory"), Some(1));
     // A requisite that doesn't declare inventory still resolves to `None` — not

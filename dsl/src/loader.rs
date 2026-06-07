@@ -367,7 +367,7 @@ pub fn load(sources: &[(String, String)]) -> Result<Bundle, Vec<LoadError>> {
       Some(ty) => {
         let counter = type_counters.entry(ty.clone()).or_insert(0);
         *counter += 1;
-        let packed = type_nibble(ty).map(|nib| crate::bits::pack_def(nib, *counter));
+        let packed = type_nibble(ty).map(|nib| resonantdust_codec::bits::pack_def(nib, *counter));
         (Some(*counter), packed)
       }
       None => (None, None),
@@ -454,7 +454,16 @@ fn index_defs(
         for d in &bucket.children {
           if let Header::Def(id) = &d.header {
             let key = id.split(':').next().unwrap_or(id).to_string();
-            if target.insert(key.clone(), d.clone()).is_none() {
+            if let Some(existing) = target.get_mut(&key) {
+              // Def already seen in an earlier source — fold this occurrence's
+              // facets/hooks onto it rather than clobbering. A card's `:visuals`
+              // facet is authored in a separate file (content/visuals/) from its
+              // `:data`; the loader serves data first, so visuals merge onto the
+              // existing node. Append-only, so the def keeps its first-appearance
+              // id (a visuals fragment never introduces or renumbers a def).
+              existing.children.extend(d.children.iter().cloned());
+            } else {
+              target.insert(key.clone(), d.clone());
               order.push(key);
             }
           }
@@ -491,6 +500,31 @@ mod tests {
     // symbol table + functions populated
     assert!(b.table.aspects.contains("type"));
     assert!(b.table.functions.contains("ring"));
+  }
+
+  #[test]
+  fn merges_split_visuals_facet_onto_data_def() {
+    // A card's `:data` lives in content/data/ and its `:visuals` in a separate
+    // content/visuals/ file under the same `::name`. The loader serves data
+    // first; the visuals occurrence must fold onto the existing def (not clobber
+    // it), and must not renumber ids.
+    let srcs = vec![
+      src("aspects.rd", "<aspect>\n  ::type>\n    @define>\n      traits &section set\n"),
+      src("data/forest.rd", "<card>\n  ::forest>\n    :data>\n      @define>\n        tile &aspect.type set\n"),
+      src("data/desert.rd", "<card>\n  ::desert>\n    :data>\n      @define>\n        tile &aspect.type set\n"),
+      src("fns.rd", "<functions:ring>\n  0 ret\n"),
+      // visuals authored separately, loaded AFTER both data files.
+      src("visuals/forest.rd", "<card>\n  ::forest>\n    :visuals>\n      @update>\n        $functions:ring call drop\n"),
+    ];
+    let b = load(&srcs).expect("clean load");
+    // both facets navigable on the one merged def
+    assert!(b.card("forest").unwrap().facet("data").unwrap().hook("define").is_some());
+    assert!(b.card("forest").unwrap().facet("visuals").unwrap().hook("update").is_some());
+    // ids stay data-derived: forest=1 (its data file came first), desert=2 — the
+    // trailing visuals fragment neither introduced nor renumbered a def.
+    assert_eq!(b.card_def_id("forest"), Some(1));
+    assert_eq!(b.card_def_id("desert"), Some(2));
+    assert_eq!(b.card_ids.len(), 2);
   }
 
   #[test]
@@ -596,12 +630,12 @@ mod tests {
 
     // packed_def → name_for_packed round-trip (tile nibble 7)
     let p = b.packed_def("forest").unwrap();
-    assert_eq!(crate::bits::unpack_def(p).0, 7);
+    assert_eq!(resonantdust_codec::bits::unpack_def(p).0, 7);
     assert_eq!(b.name_for_packed(p), Some("forest"));
     assert_eq!(b.name_for_packed(b.packed_def("desert").unwrap()), Some("desert"));
     assert_eq!(b.name_for_packed(b.packed_def("status").unwrap()), Some("status"));
     // unknown packed → none
-    assert_eq!(b.name_for_packed(crate::bits::pack_def(7, 999)), None);
+    assert_eq!(b.name_for_packed(resonantdust_codec::bits::pack_def(7, 999)), None);
 
     // lifecycle detection: only `status` writes a magnetic.* slot
     assert!(b.is_magnetic("status"));

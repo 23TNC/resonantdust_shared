@@ -14,51 +14,50 @@
 //                          `surface` is bits 24-31. The payload is always two
 //                          signed 12-bit coords (q at 12-23, r at 0-11), read
 //                          as (q,r) or (x,y) per surface.
-//   micro_location   u32 — TWO INTERPRETATIONS, gated by the `micro_is_card`
-//     flag (in flags_bk):
-//     micro_is_card set   → root card_id. The card is a stack member; its
-//                           branch is the `stack_state` flag, its slot is the
-//                           `stack_index` flag. Flat chains — root, never parent.
-//     micro_is_card clear → loose coords + offset:
+//   micro_location   u32 — TWO INTERPRETATIONS, gated by the `stack` field in
+//     `flags` (bits 0-3); `stack == 0` is the loose sentinel:
+//     stack != 0 → root card_id. The card is a stack member; its branch is
+//                  `stack - 1`, its slot is the `index` field (flags bits 4-7).
+//                  Flat chains — root, never parent.
+//     stack == 0 → loose coords + offset:
 //                   u32 = [local_q: u3 | local_r: u3 | x: i12 | y: i12 | rsvd: u2]
 //                           local_q/local_r address a cell in the zone; x/y is
-//                           the signed offset within that cell.
+//                           the signed offset within that cell. The loose `kind`
+//                           lives in the `index` field.
 //   (micro_zone u8 was REMOVED — everything it held now lives in micro_location
-//    + flags.)
+//    + flags. The former `micro_is_card` discriminator bit is gone too,
+//    subsumed by the `stack == 0` sentinel.)
 //   packed_def       u16 = [card_type: u4 | def_id: u12]
 //   zone_def         u8  = [card_type: u4 | 0: u4] (lower nibble reserved)
 //   tile slot        u16 = [def_id: u12 | stock0: u2 | stock1: u2]
 //                          packed 4-per-u64 across 16 u64s per zone — see
-//                          docs/TILE_ASPECTS.md.
+//                          docs/TILE_ASPECTS.md. (Per-card row stock lives in the
+//                          card's own `stock` u8 column, not here.)
 //
-// Unified card model: every card is a card. A chain is one root
-// (micro_is_card clear, loose/snapped) plus N members (micro_is_card set,
-// micro_location == root). The branch is the `stack_state` flag, gated on
-// micro_is_card:
-//   micro_is_card set:   0 = hex, 1 = top, 2 = bottom, 3 = deferred.
-//   micro_is_card clear: 0 = loose-hex, 1 = loose-rect, 2 = snap-hex, 3 = snap-rect.
-// `stack_index` (flag) gives the slot within a branch (0..15). stack_state,
-// stack_index, and micro_is_card all live in flags_bk so they propagate in
-// lockstep with micro_location (which the flags_state bit-diff propagator would
-// not). The "server forcing this position" signal lives in flags as the
-// `pos_need` (required) / `pos_want` (advisory) pair — see `cards/flags.json`.
+// Unified card model: every card is a card. A chain is one root (loose/snapped,
+// `stack == 0`) plus N members (`stack != 0`, micro_location == root). The branch
+// is `stack - 1`:
+//   stack != 0 (stacked): branch 0 = hex, 1 = top, 2 = bottom, 3 = deferred.
+//   stack == 0 (loose):   `index` = 0 loose-hex | 1 loose-rect | 2 snap-hex | 3 snap-rect.
+// The `index` field (flags bits 4-7) gives the slot within a branch (0..15) when
+// stacked, or the loose kind when loose. `stack` + `index` live in `flags` so
+// they propagate per-row in lockstep with micro_location. The "server forcing
+// this position" signal lives in `flags` as the `pos_need` (required) /
+// `pos_want` (advisory) pair.
 
-// `stack_state` is a 2-bit field in `flags_bk` (not an enum on micro_zone any
-// more). Its meaning is gated on the `micro_is_card` flag:
-//   micro_is_card set   (stacked):  0 hex | 1 top | 2 bottom | 3 deferred
-//   micro_is_card clear (loose):    0 loose-hex | 1 loose-rect | 2 snap-hex | 3 snap-rect
-// The stacked-branch values reuse the STACK_DIR_* constants below. The flag
-// masks/shifts are resolved through `flags::bk_flags()` (server) and the client
-// mirror — packed.rs only owns the `micro_location` bit layout.
+// The `branch` value (stored as `stack - 1` for stack members) and the loose
+// `kind` (stored in `index` when `stack == 0`) reuse the constants below. The
+// field masks/shifts are resolved through `card_model`'s layout (server + client
+// share it); packed.rs only owns the `micro_location` bit layout.
 
-/// `stack_state` value for the deferred branch (only meaningful when
-/// `micro_is_card` is set). Resolution runs at mirror time on the client;
-/// server-side the deferred follower index keeps `(surface, macro_zone)` in
-/// lockstep with the host and clears the anchor on host death.
+/// Stack `branch` value for the deferred branch (only meaningful for a stack
+/// member). Resolution runs at mirror time on the client; server-side the
+/// deferred follower index keeps `(surface, macro_zone)` in lockstep with the
+/// host and clears the anchor on host death.
 pub const STACK_STATE_DEFERRED: u8 = 3;
 
-/// `stack_state` values for the loose branch (only meaningful when
-/// `micro_is_card` is clear). Snap variants center on a cell and are the
+/// Loose `kind` values (only meaningful when `stack == 0`, stored in `index`).
+/// Snap variants center on a cell and are the
 /// exclusive (one-per-cell) occupant; loose variants carry an x/y offset.
 pub const LOOSE_HEX: u8 = 0;
 pub const LOOSE_RECT: u8 = 1;
@@ -317,26 +316,26 @@ pub fn region_of_zone(macro_zone: u64) -> (u64, u8) {
 
 // ---- stack branch directions -------------------------------------------
 //
-// `stack_state` values for the stacked branch (micro_is_card set). They match
-// the recipe-grammar **branch number** convention from `recipe_tape.rs`: a card
-// placed in `slot.<N>.<index>` of its chain root carries `stack_state == N`.
+// `branch` values for a stack member (stored as `stack - 1`). They match the
+// recipe-grammar **branch number** convention: a card placed in `slot.<N>.<index>`
+// of its chain root carries `branch == N` (and is stored with `stack == N + 1`).
 //
 // - `0` = `STACK_DIR_HEX` — the tile branch (visually beneath root; `slot.0.X`).
 // - `1` = `STACK_DIR_UP` — top branch (`slot.1.X`).
 // - `2` = `STACK_DIR_DOWN` — bottom branch (`slot.2.X`).
 //
 // The branches are structurally identical (flat root + index chains). The value
-// only tells renderers which side of root to attach the chain to. Value 3 in
-// the stacked branch is `STACK_STATE_DEFERRED`.
+// only tells renderers which side of root to attach the chain to. Branch value 3
+// is `STACK_STATE_DEFERRED`.
 pub const STACK_DIR_HEX: u8 = 0;
 pub const STACK_DIR_UP: u8 = 1;
 pub const STACK_DIR_DOWN: u8 = 2;
 
 // ---- micro_location ----------------------------------------------------
 //
-// When `micro_is_card` is CLEAR, `micro_location` is loose coords + offset:
+// When `stack == 0` (loose), `micro_location` is loose coords + offset:
 //   [ local_q:u3 (29-31) | local_r:u3 (26-28) | x:i12 (14-25) | y:i12 (2-13) | rsvd:u2 (0-1) ]
-// When `micro_is_card` is SET, `micro_location` is the root card_id (identity).
+// When `stack != 0` (stack member), `micro_location` is the root card_id (identity).
 
 const MICRO_LOOSE_X_SHIFT: u32 = 14;
 const MICRO_LOOSE_Y_SHIFT: u32 = 2;

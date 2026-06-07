@@ -1,0 +1,14 @@
+[package]
+name = "resonantdust-codec"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust codec foundation — bit-packing, flag layout, the card placement model, and ActionPlan value types. Pure encoding; no DSL. The SpacetimeDB modules link only this."
+
+[lib]
+name = "resonantdust_codec"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

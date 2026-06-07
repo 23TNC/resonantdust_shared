@@ -2,38 +2,38 @@ services:
   check:
     image: clockworklabs/spacetime:latest
     volumes:
-      - .:/workspace/wasm
-    working_dir: /workspace/wasm
+      - .:/workspace/shared
+    working_dir: /workspace/shared
     entrypoint: ["cargo"]
     command: ["check", "--workspace", "--all-targets"]
 
   build:
     image: clockworklabs/spacetime:latest
     volumes:
-      - .:/workspace/wasm
-    working_dir: /workspace/wasm
+      - .:/workspace/shared
+    working_dir: /workspace/shared
     entrypoint: ["cargo"]
     command: ["build", "--workspace", "--release"]
 
   test:
     image: clockworklabs/spacetime:latest
     volumes:
-      - .:/workspace/wasm
-    working_dir: /workspace/wasm
+      - .:/workspace/shared
+    working_dir: /workspace/shared
     entrypoint: ["cargo"]
     command: ["test", "--workspace"]
 
   # Corpus acceptance: parse every content `.rd`, build one symbol table, then
-  # validate + resolve each file. Mounts the repo root so the crate (wasm/) and
-  # the content (content/data) are both visible. The load-bearing cross-file
-  # lint — catches renames, missing art, duplicate/dangling `$` refs.
+  # validate + resolve each file. Mounts the repo root so the crate (shared/) and
+  # the content (content/, both data/ and visuals/) are visible. The load-bearing
+  # cross-file lint — catches renames, missing art, duplicate/dangling `$` refs.
   corpus:
     image: clockworklabs/spacetime:latest
     volumes:
       - ..:/workspace
-    working_dir: /workspace/wasm
+    working_dir: /workspace/shared
     entrypoint: ["cargo"]
-    command: ["run", "--quiet", "-p", "resonantdust-data", "--bin", "corpus", "--", "/workspace/content/data"]
+    command: ["run", "--quiet", "-p", "resonantdust-data", "--bin", "corpus", "--", "/workspace/content"]
 
   # Builds the JS/wasm bundle the pixijs client imports.
   #
@@ -47,10 +47,10 @@ services:
   wasm:
     image: clockworklabs/spacetime:latest
     volumes:
-      - .:/workspace/wasm
-    working_dir: /workspace/wasm
+      - .:/workspace/shared
+    working_dir: /workspace/shared
     environment:
-      PATH: /workspace/wasm/target/wasm-tools/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      PATH: /workspace/shared/target/wasm-tools/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       WASM_BINDGEN_VERSION: "0.2.122"
     entrypoint: ["bash", "-euo", "pipefail", "-c"]
     command:
@@ -58,11 +58,11 @@ services:
         if ! command -v wasm-bindgen >/dev/null 2>&1; then
           cargo install wasm-bindgen-cli \
             --version "$$WASM_BINDGEN_VERSION" \
-            --root /workspace/wasm/target/wasm-tools \
+            --root /workspace/shared/target/wasm-tools \
             --locked
         fi
         cargo build --target wasm32-unknown-unknown --features js --release
         wasm-bindgen \
-          target/wasm32-unknown-unknown/release/resonantdust_wasm.wasm \
+          target/wasm32-unknown-unknown/release/resonantdust_shared.wasm \
           --target web \
           --out-dir pkg

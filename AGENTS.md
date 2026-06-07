@@ -1,11 +1,11 @@
-# wasm/
+# shared/
 
 The shared Rust — the definition-language toolchain, the VM that runs it, the
-content loader, the storage bridge, and the client bindings. It's called "wasm"
-because this code **also** compiles to wasm for the pixijs client; it is *not*
-client-only. The **gate links it as an rlib**; the **client gets it as a wasm
-bundle**. Same logic, both sides — that single shared evaluation is the point of
-the rewrite (it replaces the old JSON crate whose logic was mirrored in TS).
+content loader, the storage bridge, and the client bindings. It's called
+"shared" because the **gate** and the **client** run this *same code*: the
+**gate links it as an rlib**, the **client gets it as a wasm bundle**. Same
+logic, both sides — that single shared evaluation is the point of the rewrite
+(it replaces the old JSON crate whose logic was mirrored in TS).
 
 ## Crates
 
@@ -26,7 +26,7 @@ the rewrite (it replaces the old JSON crate whose logic was mirrored in TS).
     operating-set `Cell`, with the satisfies fold), `operating_set` (assemble a
     frame), `pack_stock`/`unpack_stock`.
   - `bits.rs` — `get_field`/`set_field` bit primitives.
-- **root — `resonantdust-wasm` (cdylib).** Thin `wasm-bindgen` JSON wrappers over
+- **root — `resonantdust-shared` (cdylib).** Thin `wasm-bindgen` JSON wrappers over
   `data` for the browser — the `Content` handle (`load` / `cardView` /
   `matchRecipe` / `planRecipe`), gated on the `js` feature. The plain logic is
   feature-independent so `cargo test`/`check` exercise it natively.
@@ -38,16 +38,16 @@ governs: [`content/data/SYNTAX.txt`](../content/data/SYNTAX.txt) (sigils + ops)
 and [`content/data/CONVENTIONS.txt`](../content/data/CONVENTIONS.txt) (the
 slot / aspect / chain model).
 
-## Build & test (`bin/wasm`)
+## Build & test (`bin/shared`)
 
 All dockerized on the `clockworklabs/spacetime` image (host `cargo` is not used):
 
 | Command | Action |
 | --- | --- |
-| `bin/wasm test` | `cargo test --workspace` |
-| `bin/wasm corpus` | load + validate + resolve every `content/data/*.rd` (the load-bearing cross-file lint) |
-| `bin/wasm check` | `cargo check --workspace --all-targets` |
-| `bin/wasm build` | the wasm bundle (`cargo build --target wasm32 --features js` + `wasm-bindgen`) → `pkg/` |
+| `bin/shared test` | `cargo test --workspace` |
+| `bin/shared corpus` | load + validate + resolve every `content/data/*.rd` (the load-bearing cross-file lint) |
+| `bin/shared check` | `cargo check --workspace --all-targets` |
+| `bin/shared build` | the wasm bundle (`cargo build --target wasm32 --features js` + `wasm-bindgen`) → `pkg/` |
 
 ## Migration status
 
@@ -68,7 +68,7 @@ fold) → loader → bridge → wasm bindings.
 
 ## Planned crate decomposition (by load-side)
 
-`wasm/` is the home for *all* shared Rust, split so neither runtime loads what it
+`shared/` is the home for *all* shared Rust, split so neither runtime loads what it
 doesn't use (Cargo's dependency graph enforces it):
 
 - **SHARED** (gate + client): `core` (today's `data`) · `biome` (terrain gen,

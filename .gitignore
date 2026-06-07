@@ -35,9 +35,13 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Rust build artifacts
-/target/
+# Rust build artifacts — any `target/` at any depth (workspace + per-member
+# crate dirs codec/dsl/state/protocol/data, which docker builds as root).
+target/
 **/*.rs.bk
+
+# Local backups
+.backup/
 
 # Cargo
 Cargo.lock

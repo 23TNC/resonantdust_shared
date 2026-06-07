@@ -186,7 +186,7 @@ pub fn pack_stock(schema: &[(String, i64)], values: &[i64]) -> u32 {
   for (i, (_, bits)) in schema.iter().enumerate() {
     let w = *bits as u32;
     let v = values.get(i).copied().unwrap_or(0) as u32;
-    word = crate::bits::set_field(word, off, w, v);
+    word = resonantdust_codec::bits::set_field(word, off, w, v);
     off += w;
   }
   word
@@ -198,7 +198,7 @@ pub fn unpack_stock(schema: &[(String, i64)], word: u32) -> Vec<i64> {
   let mut off = 0u32;
   for (_, bits) in schema {
     let w = *bits as u32;
-    out.push(crate::bits::get_field(word, off, w) as i64);
+    out.push(resonantdust_codec::bits::get_field(word, off, w) as i64);
     off += w;
   }
   out

@@ -1,0 +1,15 @@
+[package]
+name = "resonantdust-dsl"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust definition language + recipe runtime — parser, resolver, validator, loader, VM, bridge, defs, recipe iterators, worldgen, noise, locales. One indivisible crate (loader↔vm↔worldgen↔resolve are mutually recursive). Builds on resonantdust-codec."
+
+[lib]
+name = "resonantdust_dsl"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+resonantdust-codec = { path = "../codec" }

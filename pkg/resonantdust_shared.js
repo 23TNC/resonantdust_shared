@@ -1,4 +1,4 @@
-/* @ts-self-types="./resonantdust_wasm.d.ts" */
+/* @ts-self-types="./resonantdust_shared.d.ts" */
 
 /**
  * A loaded content runtime: the [`Bundle`] plus the operations the client
@@ -624,7 +624,7 @@ function __wbg_get_imports() {
     };
     return {
         __proto__: null,
-        "./resonantdust_wasm_bg.js": import0,
+        "./resonantdust_shared_bg.js": import0,
     };
 }
 
@@ -838,7 +838,7 @@ async function __wbg_init(module_or_path) {
     }
 
     if (module_or_path === undefined) {
-        module_or_path = new URL('resonantdust_wasm_bg.wasm', import.meta.url);
+        module_or_path = new URL('resonantdust_shared_bg.wasm', import.meta.url);
     }
     const imports = __wbg_get_imports();
 

@@ -3,16 +3,20 @@ name = "resonantdust-data"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Resonant Dust shared data-manipulation crate — pure logic (packing/unpacking, bit-field helpers, matcher) over bytes and rows passed in. No embedded catalog JSON. Linked as an rlib by the SpacetimeDB modules and wrapped by `resonantdust-wasm` for the client."
+description = "Transitional facade re-exporting the split shared crates (codec / dsl / state / protocol) under the old module paths, so existing `use resonantdust_data::X` keeps compiling while consumers migrate to the member crates. Deleted once narrowed (see docs/shared_crate_split)."
 
 [lib]
 name = "resonantdust_data"
 path = "src/lib.rs"
-# rlib only: the server links this directly; the browser gets it via the
-# `resonantdust-wasm` bindings crate, which is the cdylib.
 crate-type = ["rlib"]
 
+[features]
+# Re-export the wire protocol — exactly as before, the gateway + client enable
+# this and the SpacetimeDB modules don't (so they never pull serde_json).
+protocol = ["dep:resonantdust-protocol"]
+
 [dependencies]
-# Derive-only: lets the wasm bindings (and the gate's wire) serialize the value
-# types (Cell/Plan/Card). No runtime serde format is chosen here.
-serde = { version = "1", features = ["derive"] }
+resonantdust-codec = { path = "../codec" }
+resonantdust-dsl = { path = "../dsl" }
+resonantdust-state = { path = "../state" }
+resonantdust-protocol = { path = "../protocol", optional = true }
