@@ -30,8 +30,14 @@ pub enum Effect {
   Create { def_key: String, surface: u8, macro_zone: u64, owner_id: u32 },
   /// Spawn a deferred stack member anchored to `host_card_id`.
   CreateDeferred { def_key: String, host_card_id: u32 },
-  /// Mutate the synthetic tile's per-cell stock `slot` (`set_tile_stock`).
+  /// Mutate the synthetic tile's per-cell stock `slot` (`set_tile_stock`) — the
+  /// zone-savable u4 path.
   ModifyTileStock { slot: u8, op: StockOp, delta: u8 },
+  /// Set a bound CARD's full per-card `stock` u32 to a gate-computed value
+  /// (current stock with one slot's bits replaced). The card holds the result —
+  /// the upper 28 bits are card-only (transient unless the card persists), only
+  /// the bottom u4 ever round-trips to a zone tile.
+  SetCardStock { card_id: u32, stock: u32 },
   /// Set a blueprint's discovery bit on the target soul (`unlock_blueprint`).
   /// `blueprint_id` is the Bundle's blueprint id (the discovery-bit index),
   /// resolved from the recipe's `$blueprint::<key>` ref at plan-translation time.

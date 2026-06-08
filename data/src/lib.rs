@@ -9,7 +9,7 @@ pub use resonantdust_codec::{bits, card_model, flags, packed, plan};
 pub use resonantdust_dsl::{
     bridge, defs, inspect, loader, locales, noise, parser, recipe, resolve, validate, vm, worldgen,
 };
-pub use resonantdust_state::recipe_state;
+pub use resonantdust_state::{recipe_state, stack};
 
 /// Wire protocol — behind the `protocol` feature (gateway + client), exactly as
 /// before. The SpacetimeDB modules don't enable it, so they don't pull serde_json.

@@ -8,3 +8,4 @@
 //! semantics, the host/join stacking resolver) land here next.
 
 pub mod recipe_state;
+pub mod stack;

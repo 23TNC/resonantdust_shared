@@ -1,5 +1,5 @@
 [workspace]
-members = ["codec", "protocol", "dsl", "state", "data"]
+members = ["codec", "protocol", "dsl", "state", "rules", "data"]
 
 [package]
 name = "resonantdust-shared"

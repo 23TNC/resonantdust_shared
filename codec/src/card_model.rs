@@ -17,9 +17,9 @@
 //! # Stack semantics
 //!
 //! `stack` (bits 0-3 of `flags`) is the discriminator:
-//!   - `stack == 0` → **loose**: `micro_location` is packed coords and `index`
-//!     (bits 4-7) holds the loose `kind` (`LOOSE_HEX`/`LOOSE_RECT`/`SNAP_HEX`/
-//!     `SNAP_RECT`).
+//!   - `stack == 0` → **loose**: `micro_location` is packed cell coords + offset;
+//!     `index` (bits 4-7) is unused. Every surface is a uniform hex cell — there
+//!     is no loose "kind"; snapped-vs-free is a render concern (zero offset).
 //!   - `stack != 0` → **stack member**: `micro_location` is the root card_id,
 //!     `stack` is `branch + 1` (so the loose sentinel stays distinct), and
 //!     `index` is the slot within the branch (0..15).
@@ -36,27 +36,16 @@ pub enum Micro {
     /// Stack member of `root` (a loose/snapped card) in `branch`
     /// (`STACK_DIR_HEX`/`UP`/`DOWN`, or `STACK_STATE_DEFERRED`) at slot `index`.
     Stacked { root: u32, branch: u8, index: u8 },
-    /// Loose at cell `(local_q, local_r)` with within-cell offset `(x, y)` and
-    /// `kind` (`LOOSE_HEX`/`LOOSE_RECT`/`SNAP_HEX`/`SNAP_RECT`).
-    Loose {
-        local_q: u8,
-        local_r: u8,
-        x: i16,
-        y: i16,
-        kind: u8,
-    },
+    /// Loose at cell `(local_q, local_r)` with a within-cell offset `(x, y)`.
+    /// Every surface is a uniform hex cell; "snapped vs free" is render-only (a
+    /// snapped card carries a zero offset), so there is no `kind`.
+    Loose { local_q: u8, local_r: u8, x: i16, y: i16 },
 }
 
 impl Micro {
     /// Loose with no within-cell offset (snapped to the cell center).
-    pub fn snap(local_q: u8, local_r: u8, kind: u8) -> Self {
-        Micro::Loose {
-            local_q,
-            local_r,
-            x: 0,
-            y: 0,
-            kind,
-        }
+    pub fn snap(local_q: u8, local_r: u8) -> Self {
+        Micro::Loose { local_q, local_r, x: 0, y: 0 }
     }
 
     /// A deferred stack member anchored to `host` (resolved at mirror time).
@@ -81,11 +70,9 @@ impl Micro {
                 let f = cleared | l.stack.pack(stack) | l.index.pack(index as u32);
                 (root, f)
             }
-            Micro::Loose { local_q, local_r, x, y, kind } => {
-                let ml = pack_micro_loose(local_q, local_r, x, y);
-                // stack stays 0 (sentinel); `index` carries the loose kind.
-                let f = cleared | l.index.pack(kind as u32);
-                (ml, f)
+            Micro::Loose { local_q, local_r, x, y } => {
+                // stack stays 0 (the loose sentinel); `index` is left clear.
+                (pack_micro_loose(local_q, local_r, x, y), cleared)
             }
         }
     }
@@ -94,22 +81,15 @@ impl Micro {
     pub fn of(micro_location: u32, flags: u32) -> Self {
         let l = layout();
         let stack = l.stack.read(flags);
-        let index = l.index.read(flags) as u8;
         if stack != 0 {
             Micro::Stacked {
                 root: micro_location,
                 branch: (stack - 1) as u8,
-                index,
+                index: l.index.read(flags) as u8,
             }
         } else {
             let (local_q, local_r, x, y) = unpack_micro_loose(micro_location);
-            Micro::Loose {
-                local_q,
-                local_r,
-                x,
-                y,
-                kind: index,
-            }
+            Micro::Loose { local_q, local_r, x, y }
         }
     }
 }
@@ -147,19 +127,29 @@ pub fn state_mask() -> u32 {
     layout().state_mask
 }
 
-/// Read tile-card per-row stock `slot` (0 or 1) from the `stock` byte.
-pub fn stock(stock: u8, slot: usize) -> u8 {
+/// The `stock` column is a full `u32` of per-card variable data — pack it however
+/// you like (16 u2s, 4 u8s, a u8 progress counter + flags, …). Nothing is special
+/// about any bits EXCEPT this: only the **bottom 4 bits** (`STOCK_ZONE_SAVE_BITS`,
+/// the two legacy u2 slots) can be persisted back into a zone tile slot — a zone
+/// tile only stores a u4. The upper 28 bits are card-only (transient unless the
+/// card itself persists). [`stock`] / [`write_stock`] access the two u2 zone-saved
+/// slots; read/write the upper bits with your own masks.
+pub fn stock(stock: u32, slot: usize) -> u8 {
     let f = stock_field(slot);
-    ((stock as u32 & f.mask) >> f.shift) as u8
+    ((stock & f.mask) >> f.shift) as u8
 }
 
-/// Write tile-card per-row stock `slot` (0 or 1) into the `stock` byte, returning
-/// the new byte (value clamped to the 2-bit field width).
-pub fn write_stock(stock: u8, slot: usize, value: u8) -> u8 {
+/// Write zone-savable stock `slot` (0 or 1, the bottom u4) into the `stock` word,
+/// returning the new word (value clamped to the 2-bit field width; all other bits
+/// preserved).
+pub fn write_stock(stock: u32, slot: usize, value: u8) -> u32 {
     let f = stock_field(slot);
-    let host = stock as u32;
-    ((host & !f.mask) | ((value as u32).min(f.max) << f.shift)) as u8
+    (stock & !f.mask) | ((value as u32).min(f.max) << f.shift)
 }
+
+/// Mask of the stock bits that can be saved back to a zone tile slot (the bottom
+/// u4 — a zone tile only persists a u4). The upper 28 bits are card-only.
+pub const STOCK_ZONE_SAVE_MASK: u32 = 0x0000_000F;
 
 /// True when any refcount hold field (`touch_count`, `server_count`,
 /// `slot_claim_count`, `slot_borrow_count`, `drop_hold_count`,
@@ -210,10 +200,19 @@ pub fn is_dead(flags: u32) -> bool {
     flags & layout().dead != 0
 }
 
-/// `flags.player_owned` set? (the owner chain names a player here).
-pub fn player_owned(flags: u32) -> bool {
-    flags & layout().player_owned != 0
+/// Whether a card is ineligible to be bound into ANY new action, verb-independent:
+/// it's `dead` (destroyed) or exclusively `slot_claim`-held by an in-flight action.
+/// The shared baseline both sides apply — the gate's `check_card` gates on it
+/// before its verb-specific checks (borrow / touch cap), and the client matcher
+/// skips such cards so it never proposes what the gate would reject. (A borrow
+/// hold only blocks *exclusive* claims, so it's verb-dependent and lives in
+/// `check_card`, not here.)
+pub fn bind_blocked(flags: u32) -> bool {
+    is_dead(flags) || hold_count(flags, HoldField::SlotClaim) > 0
 }
+// `player_owned` flag RETIRED (bit 24 reclaimed): the player_soul is identified
+// by its DEFINITION now (`packed::is_player_soul`, the reserved 0xFFF0..=0xFFFF
+// range), not a flag — so the owner-walk terminus needs no propagating bit.
 
 /// `flags` with `field` incremented by one (saturating at the field's max).
 pub fn increment_hold(flags: u32, field: HoldField) -> u32 {
@@ -282,7 +281,6 @@ struct FlagsLayout {
     hold_counts_mask: u32,
     // single-bit state
     dead: u32,
-    player_owned: u32,
     /// Union of the bit-diff-propagated state bits.
     state_mask: u32,
     /// `dead | pos_need | pos_want` — blocks demotion back to a tile slot.
@@ -319,7 +317,6 @@ fn layout() -> &'static FlagsLayout {
         let dead = bit("dead");
         let pos_need = bit("pos_need");
         let pos_want = bit("pos_want");
-        let player_owned = bit("player_owned");
         let surface_locked = bit("surface_locked");
         let zone_born = bit("zone_born");
         FlagsLayout {
@@ -333,8 +330,7 @@ fn layout() -> &'static FlagsLayout {
             server,
             hold_counts_mask,
             dead,
-            player_owned,
-            state_mask: dead | pos_need | pos_want | player_owned | surface_locked | zone_born,
+            state_mask: dead | pos_need | pos_want | surface_locked | zone_born,
             demote_blocking: dead | pos_need | pos_want,
         }
     })
@@ -367,10 +363,10 @@ mod tests {
 
     #[test]
     fn loose_roundtrip() {
-        let m = Micro::Loose { local_q: 2, local_r: 5, x: -3, y: 7, kind: 1 };
+        let m = Micro::Loose { local_q: 2, local_r: 5, x: -3, y: 7 };
         let (ml, f) = m.apply(0);
         assert!(!micro_is_card(f));
-        assert_eq!(stack_index(f), 1); // loose kind stored in index
+        assert_eq!(stack_index(f), 0); // index unused when loose
         assert_eq!(Micro::of(ml, f), m);
     }
 
@@ -388,7 +384,7 @@ mod tests {
     fn apply_preserves_state_and_holds() {
         // A state bit and a hold count survive a placement write.
         let base = layout().dead | increment_hold(0, HoldField::Touch);
-        let (_ml, f) = Micro::snap(0, 0, 1).apply(base);
+        let (_ml, f) = Micro::snap(0, 0).apply(base);
         assert!(is_dead(f));
         assert_eq!(hold_count(f, HoldField::Touch), 1);
     }
@@ -425,7 +421,7 @@ mod tests {
         assert!(has_active_holds(held));
         assert!(state_blocks_demotion(layout().dead));
         // holds and placement live outside the demote-blocking mask.
-        let (_ml, placed) = Micro::snap(0, 0, 1).apply(0);
+        let (_ml, placed) = Micro::snap(0, 0).apply(0);
         assert!(!state_blocks_demotion(placed));
     }
 

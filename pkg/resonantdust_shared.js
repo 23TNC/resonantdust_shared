@@ -542,15 +542,15 @@ export function cardFlagFieldShape(field, name) {
 }
 
 /**
- * @param {number} flags_state
- * @param {number} flags_bk
+ * @param {number} flags
+ * @param {number} stock
  * @param {string} name
  * @returns {number | undefined}
  */
-export function cardFlagFieldValueAny(flags_state, flags_bk, name) {
+export function cardFlagFieldValueAny(flags, stock, name) {
     const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.cardFlagFieldValueAny(flags_state, flags_bk, ptr0, len0);
+    const ret = wasm.cardFlagFieldValueAny(flags, stock, ptr0, len0);
     return ret === Number.MAX_SAFE_INTEGER ? undefined : ret;
 }
 
@@ -581,15 +581,15 @@ export function cardTypeId(name) {
 }
 
 /**
- * @param {number} flags_state
+ * @param {number} flags
  * @param {number} flags_bk
  * @param {string} name
  * @returns {boolean}
  */
-export function hasCardFlag(flags_state, flags_bk, name) {
+export function hasCardFlag(flags, flags_bk, name) {
     const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.hasCardFlag(flags_state, flags_bk, ptr0, len0);
+    const ret = wasm.hasCardFlag(flags, flags_bk, ptr0, len0);
     return ret !== 0;
 }
 

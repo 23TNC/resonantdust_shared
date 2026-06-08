@@ -30,7 +30,7 @@ const TYPE_NIBBLES: &[(&str, u8)] = &[
   ("revery", 2),
   ("discipline", 4),
   ("faculty", 5),
-  ("soul", 6),
+  ("soul", 15), // 0xF — all souls; player-souls reserve the top defs 0xFFF0..=0xFFFF
   ("tile", 7),
   ("mini_zone", 8),
   ("tile_decorator", 9),
@@ -356,19 +356,46 @@ pub fn load(sources: &[(String, String)]) -> Result<Bundle, Vec<LoadError>> {
   // instances keep pointing at the same def. (No sort; no id.json.)
 
   // Precompute per-card identity once. Walking `card_ids` in order assigns each
-  // type its 1-based, append-stable, content-derived `def_id`.
+  // type its append-stable `def_id`: an EXPLICIT `&aspect.def_id set` in the
+  // card's `@define` pins it (lets content reserve fixed slots — e.g. the
+  // player_soul at 0xFFF so its packed def is 0xFFFF); otherwise the next free
+  // value of a per-type counter is used (skipping any explicitly-claimed ids).
   // Replaces the old per-call AST walks (worldgen hit `type_def_id` per tile and
   // `name_for_packed` was O(n²)).
   let card_ids = b.card_ids.clone();
   let mut type_counters: HashMap<String, u16> = HashMap::new();
+  let mut type_used: HashMap<String, std::collections::HashSet<u16>> = HashMap::new();
   for name in &card_ids {
-    let card_type = b.cards.get(name).and_then(parse_card_type);
+    let node = b.cards.get(name);
+    let card_type = node.and_then(parse_card_type);
+    let explicit = node.and_then(parse_card_def_id);
     let (type_def_id, packed) = match &card_type {
       Some(ty) => {
-        let counter = type_counters.entry(ty.clone()).or_insert(0);
-        *counter += 1;
-        let packed = type_nibble(ty).map(|nib| resonantdust_codec::bits::pack_def(nib, *counter));
-        (Some(*counter), packed)
+        let used = type_used.entry(ty.clone()).or_default();
+        let id = match explicit {
+          Some(e) => {
+            if !used.insert(e) {
+              errors.push(LoadError {
+                file: name.clone(),
+                message: format!("duplicate def_id {e} for card type {ty:?} (card {name:?})"),
+              });
+            }
+            e
+          }
+          None => {
+            // Next free counter value (an explicit id can sit anywhere, so skip
+            // ones already claimed).
+            let counter = type_counters.entry(ty.clone()).or_insert(0);
+            loop {
+              *counter += 1;
+              if used.insert(*counter) {
+                break *counter;
+              }
+            }
+          }
+        };
+        let packed = type_nibble(ty).map(|nib| resonantdust_codec::bits::pack_def(nib, id));
+        (Some(id), packed)
       }
       None => (None, None),
     };
@@ -415,6 +442,29 @@ fn parse_card_type(node: &Node) -> Option<String> {
       Token::Const(s) => Some(s.clone()),
       _ => None,
     };
+  }
+  None
+}
+
+/// Optional explicit per-type `def_id` declared in a card's `@define` as
+/// `<n> &aspect.def_id set`. Lets content PIN a card's packed def to a fixed
+/// slot — e.g. the player_soul to `0xFFF` so its `packed_definition` is `0xFFFF`
+/// (the reserved player-soul range). `None` → the def_id is auto-incremented.
+/// Read the same way as `aspect.type` (the loader's two content-pinned fields).
+fn parse_card_def_id(node: &Node) -> Option<u16> {
+  let define = node.facet("data")?.hook("define")?;
+  for stmt in &define.body {
+    let Stmt::Instr(toks) = stmt else { continue };
+    let Some(slot) = toks.iter().position(|t| matches!(t, Token::Slot(s) if s == "aspect.def_id"))
+    else {
+      continue;
+    };
+    if !matches!(toks.last(), Some(Token::Word(w)) if w == "set") || slot == 0 {
+      continue;
+    }
+    if let Token::Number(n) = &toks[slot - 1] {
+      return u16::try_from(*n).ok();
+    }
   }
   None
 }

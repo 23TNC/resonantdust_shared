@@ -1,0 +1,16 @@
+[package]
+name = "resonantdust-rules"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Resonant Dust gameplay rules — the recipe glue that runs a proposal's recipe on the shared VM and translates the result into an ActionPlan, reading cards through a CardStore. The top layer: depends on dsl (vm/recipe), state (CardStore), and codec (plan). Shared by the gate and the client."
+
+[lib]
+name = "resonantdust_rules"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+[dependencies]
+resonantdust-codec = { path = "../codec" }
+resonantdust-dsl = { path = "../dsl" }
+resonantdust-state = { path = "../state" }

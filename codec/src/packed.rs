@@ -38,43 +38,24 @@
 // `stack == 0`) plus N members (`stack != 0`, micro_location == root). The branch
 // is `stack - 1`:
 //   stack != 0 (stacked): branch 0 = hex, 1 = top, 2 = bottom, 3 = deferred.
-//   stack == 0 (loose):   `index` = 0 loose-hex | 1 loose-rect | 2 snap-hex | 3 snap-rect.
+//   stack == 0 (loose):   `micro_location` is loose coords + within-cell offset.
 // The `index` field (flags bits 4-7) gives the slot within a branch (0..15) when
-// stacked, or the loose kind when loose. `stack` + `index` live in `flags` so
-// they propagate per-row in lockstep with micro_location. The "server forcing
-// this position" signal lives in `flags` as the `pos_need` (required) /
-// `pos_want` (advisory) pair.
+// stacked, and is UNUSED when loose. (There is no longer a loose "kind": every
+// surface is a uniform hex cell, and snapped-vs-free is a pure render concern —
+// a snapped card simply carries a zero `(x, y)` offset.) `stack` + `index` live
+// in `flags` so they propagate per-row in lockstep with micro_location. The
+// "server forcing this position" signal lives in `flags` as the `pos_need`
+// (required) / `pos_want` (advisory) pair.
 
-// The `branch` value (stored as `stack - 1` for stack members) and the loose
-// `kind` (stored in `index` when `stack == 0`) reuse the constants below. The
-// field masks/shifts are resolved through `card_model`'s layout (server + client
-// share it); packed.rs only owns the `micro_location` bit layout.
+// The `branch` value is stored as `stack - 1` for stack members. The field
+// masks/shifts are resolved through `card_model`'s layout (server + client share
+// it); packed.rs only owns the `micro_location` bit layout.
 
 /// Stack `branch` value for the deferred branch (only meaningful for a stack
 /// member). Resolution runs at mirror time on the client; server-side the
 /// deferred follower index keeps `(surface, macro_zone)` in lockstep with the
 /// host and clears the anchor on host death.
 pub const STACK_STATE_DEFERRED: u8 = 3;
-
-/// Loose `kind` values (only meaningful when `stack == 0`, stored in `index`).
-/// Snap variants center on a cell and are the
-/// exclusive (one-per-cell) occupant; loose variants carry an x/y offset.
-pub const LOOSE_HEX: u8 = 0;
-pub const LOOSE_RECT: u8 = 1;
-pub const SNAP_HEX: u8 = 2;
-pub const SNAP_RECT: u8 = 3;
-
-/// Default loose `kind` for a card placed loose on `surface`: hex-grid surfaces
-/// (world) use `LOOSE_HEX`; container surfaces (inventory, pocket dimension,
-/// player inventory) use `LOOSE_RECT`. (mini_zone stripped — see
-/// [`MINI_ZONE_LAYER`]; re-add the band here when it returns.)
-pub fn loose_kind_for_surface(surface: u8) -> u8 {
-    if surface >= WORLD_LAYER {
-        LOOSE_HEX
-    } else {
-        LOOSE_RECT
-    }
-}
 
 // ---- surface bands ------------------------------------------------------
 //
@@ -333,14 +314,17 @@ pub const STACK_DIR_DOWN: u8 = 2;
 
 // ---- micro_location ----------------------------------------------------
 //
-// When `stack == 0` (loose), `micro_location` is loose coords + offset:
-//   [ local_q:u3 (29-31) | local_r:u3 (26-28) | x:i12 (14-25) | y:i12 (2-13) | rsvd:u2 (0-1) ]
-// When `stack != 0` (stack member), `micro_location` is the root card_id (identity).
+// When `stack == 0` (loose), `micro_location` is a within-cell offset + cell:
+//   [ x:i12 (20-31) | y:i12 (8-19) | local_q:u3 (5-7) | local_r:u3 (2-4) | rsvd:u2 (0-1) ]
+// The low byte is `[local_q:u3 | local_r:u3 | rsvd:u2]` — the cell address inside
+// the zone; the upper 24 bits are the signed within-cell `(x, y)` offset. A
+// snapped (centered) card just carries a zero offset. When `stack != 0` (stack
+// member), `micro_location` is the root card_id (identity).
 
-const MICRO_LOOSE_X_SHIFT: u32 = 14;
-const MICRO_LOOSE_Y_SHIFT: u32 = 2;
-const MICRO_LOOSE_LQ_SHIFT: u32 = 29;
-const MICRO_LOOSE_LR_SHIFT: u32 = 26;
+const MICRO_LOOSE_X_SHIFT: u32 = 20;
+const MICRO_LOOSE_Y_SHIFT: u32 = 8;
+const MICRO_LOOSE_LQ_SHIFT: u32 = 5;
+const MICRO_LOOSE_LR_SHIFT: u32 = 2;
 
 /// Sign-extend the 12-bit field at `shift` of `v` (a u32) into an `i16`.
 fn micro_coord(v: u32, shift: u32) -> i16 {
@@ -415,6 +399,29 @@ pub fn pack_definition(card_type: u8, def_id: u16) -> u16 {
 
 pub fn unpack_definition(v: u16) -> (u8, u16) {
     (((v >> 12) & 0xF) as u8, v & DEF_ID_MASK)
+}
+
+/// `card_type` nibble for souls (the high 4 bits of `packed_definition`). All
+/// souls — including the player_soul — live in this type, so `packed_definition
+/// >= SOUL_CARD_TYPE << 12` (`>= 0xF000`) is "any soul".
+pub const SOUL_CARD_TYPE: u8 = 0xF;
+
+/// Lowest `packed_definition` reserved for **player-soul** cards: the top 16
+/// def_ids of the soul type (`0xFFF0..=0xFFFF`). A card in this range IS a
+/// player_soul — the owner-walk terminus, the player's in-world representative —
+/// identified by **definition alone** (no flag), so it's queryable with a plain
+/// `packed_definition >= PLAYER_SOUL_PACKED_MIN`. The canonical player_soul is
+/// [`PLAYER_SOUL_PACKED`] (`0xFFFF`); the other 15 slots are reserved for future
+/// player-soul variants. Pinned in content via an explicit DSL `def_id`.
+pub const PLAYER_SOUL_PACKED_MIN: u16 = 0xFFF0;
+
+/// The canonical player_soul `packed_definition` (`0xFFFF` — soul type, top def).
+pub const PLAYER_SOUL_PACKED: u16 = 0xFFFF;
+
+/// Is this packed definition a player-soul card (the reserved top-16 range)?
+/// Replaces the old `player_owned` flag as the player-soul boundary marker.
+pub fn is_player_soul(packed_definition: u16) -> bool {
+    packed_definition >= PLAYER_SOUL_PACKED_MIN
 }
 
 // ---- zone_definition (u8 = u4 card_type | u4 0) -----------------------

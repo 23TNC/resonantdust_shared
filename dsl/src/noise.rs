@@ -174,8 +174,12 @@ pub fn climate_floats(global_q: i32, global_r: i32, seed: u64) -> [f64; AXIS_COU
 mod tests {
   use super::*;
 
-  /// Reference world seed (`world_gen::WORLD_SEED`), used by the parity lock.
-  const WORLD_SEED: u64 = 0x27;
+  /// Fixed parity-lock reference seed. NOT the live gameplay seed
+  /// (`gateway::worldgen::WORLD_SEED`, currently 1) — this is a frozen value the
+  /// bit-for-bit Rust↔TS noise check (`matches_legacy_noise_bit_for_bit`) and
+  /// the int-scaling guard are pinned against; changing it would invalidate the
+  /// hardcoded reference bits below.
+  const REF_SEED: u64 = 0x27;
 
   #[test]
   fn deterministic_and_seed_sensitive() {
@@ -187,7 +191,7 @@ mod tests {
   fn samples_in_unit_range() {
     for q in -50..50 {
       for r in -50..50 {
-        for v in climate_ints(q, r, WORLD_SEED) {
+        for v in climate_ints(q, r, REF_SEED) {
           assert!((0..=99).contains(&v), "axis out of range at ({q},{r}): {v}");
         }
       }
@@ -201,7 +205,7 @@ mod tests {
   #[test]
   fn matches_legacy_noise_bit_for_bit() {
     assert_eq!(value_noise(1.7, 2.3, 42).to_bits(), 0x3F3A_3729);
-    // [elevation, temperature, humidity, aether] f32 bits at WORLD_SEED.
+    // [elevation, temperature, humidity, aether] f32 bits at REF_SEED.
     // (rarity is DSL-only — no legacy reference, so not pinned here.)
     let cases: [(i32, i32, [u32; 4]); 5] = [
       (0, 0, [0x3F16_282F, 0x3F10_E401, 0x3F40_0A1D, 0x3E21_7E5D]),
@@ -211,19 +215,20 @@ mod tests {
       (40, 40, [0x3F1D_8603, 0x3F2E_0A9F, 0x3ECE_D2F3, 0x3F26_2CE8]),
     ];
     for (q, r, bits) in cases {
-      assert_eq!(sample_elevation(q, r, WORLD_SEED).to_bits(), bits[0], "elev ({q},{r})");
-      assert_eq!(sample_temperature(q, r, WORLD_SEED).to_bits(), bits[1], "temp ({q},{r})");
-      assert_eq!(sample_humidity(q, r, WORLD_SEED).to_bits(), bits[2], "humid ({q},{r})");
-      assert_eq!(sample_aether(q, r, WORLD_SEED).to_bits(), bits[3], "aether ({q},{r})");
+      assert_eq!(sample_elevation(q, r, REF_SEED).to_bits(), bits[0], "elev ({q},{r})");
+      assert_eq!(sample_temperature(q, r, REF_SEED).to_bits(), bits[1], "temp ({q},{r})");
+      assert_eq!(sample_humidity(q, r, REF_SEED).to_bits(), bits[2], "humid ({q},{r})");
+      assert_eq!(sample_aether(q, r, REF_SEED).to_bits(), bits[3], "aether ({q},{r})");
     }
   }
 
   #[test]
   fn origin_lands_in_forest_envelope() {
-    // WORLD_SEED is chosen so the spawn origin sits inside the forest biome
-    // (elevation 30-75, temperature 20-70, humidity 55-95). Guards the seed +
-    // the int scaling together.
-    let [elev, temp, humid, _aeth, _rar] = climate_ints(0, 0, WORLD_SEED);
+    // At the fixed REF_SEED, origin (0,0) lands in the forest envelope
+    // (elevation 30-75, temperature 20-70, humidity 55-95). Not a gameplay
+    // claim (the live seed differs) — this pins REF_SEED's climate + the int
+    // scaling together, so a drift in either is caught.
+    let [elev, temp, humid, _aeth, _rar] = climate_ints(0, 0, REF_SEED);
     assert_eq!([elev, temp, humid], [58, 56, 75]);
     assert!((30..=75).contains(&elev) && (20..=70).contains(&temp) && (55..=95).contains(&humid));
   }

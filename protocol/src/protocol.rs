@@ -102,6 +102,12 @@ pub enum GateMsg {
     /// connected client; each re-fetches `/content` and rebuilds. Replaces
     /// polling `/content-version`.
     ContentChanged { version: String },
+    /// Live OBSERVER count for a world `macro_zone` — distinct connections whose
+    /// card-subscription covers it (gate-derived). Broadcast when it changes; a
+    /// client gates its move-sync on it: a move in a zone with `observers > 1` is
+    /// shared space and must sync, `≤ 1` stays client-local. `macro_zone` is
+    /// string-encoded (exceeds JS safe-integer range).
+    ZoneObservers { macro_zone: String, observers: u32 },
 }
 
 impl GateMsg {
@@ -142,6 +148,15 @@ impl GateMsg {
     /// Build a `content_changed` broadcast frame, serialized for the sink.
     pub fn content_changed(version: String) -> String {
         GateMsg::ContentChanged { version }.to_json()
+    }
+
+    /// Build a `zone_observers` broadcast frame, serialized for the sink.
+    pub fn zone_observers(macro_zone: u64, observers: u32) -> String {
+        GateMsg::ZoneObservers {
+            macro_zone: macro_zone.to_string(),
+            observers,
+        }
+        .to_json()
     }
 }
 

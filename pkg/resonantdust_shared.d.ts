@@ -129,13 +129,13 @@ export function cardFlagBitIn(field: string, name: string): number | undefined;
 
 export function cardFlagFieldShape(field: string, name: string): Uint8Array | undefined;
 
-export function cardFlagFieldValueAny(flags_state: number, flags_bk: number, name: string): number | undefined;
+export function cardFlagFieldValueAny(flags: number, stock: number, name: string): number | undefined;
 
 export function cardFlagFieldValueIn(field: string, host: number, name: string): number | undefined;
 
 export function cardTypeId(name: string): number | undefined;
 
-export function hasCardFlag(flags_state: number, flags_bk: number, name: string): boolean;
+export function hasCardFlag(flags: number, flags_bk: number, name: string): boolean;
 
 export function isHexType(type_id: number): boolean;
 

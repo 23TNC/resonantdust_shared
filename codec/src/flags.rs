@@ -16,8 +16,8 @@
 //! is append-only within a column: never reuse a bit.
 //!
 //! Stack semantics: `stack` (bits 0-3 of `flags`) is `0` for a loose card
-//! (then `micro_location` is packed coords and `index` is the loose `kind`) and
-//! nonzero for a stack member (then `micro_location` is the root card_id,
+//! (then `micro_location` is packed cell coords + offset and `index` is unused)
+//! and nonzero for a stack member (then `micro_location` is the root card_id,
 //! `stack` is `branch + 1`, and `index` is the slot within the branch). The
 //! `stack == 0` sentinel replaces the former `micro_is_card` discriminator bit.
 
@@ -48,7 +48,8 @@ impl FlagField {
 pub fn flag_bit(field: &str, name: &str) -> Option<u8> {
   Some(match (field, name) {
     // --- flags (propagating) — single-bit state ---
-    ("flags", "player_owned") => 24,
+    // bit 24 was `player_owned`, RETIRED — player_soul is identified by its
+    // definition now (packed::is_player_soul). Free for reuse.
     ("flags", "surface_locked") => 25,
     ("flags", "dead") => 26,
     ("flags", "pos_need") => 27,
@@ -91,7 +92,7 @@ mod tests {
   #[test]
   fn known_bits_and_fields() {
     assert_eq!(flag_bit("flags", "dead"), Some(26));
-    assert_eq!(flag_bit("flags", "player_owned"), Some(24));
+    assert_eq!(flag_bit("flags", "player_owned"), None); // retired; bit 24 reclaimed
     assert_eq!(flag_bit("flags_bk", "position_dirty"), Some(0));
     assert_eq!(flag_bit("flags", "ghost"), None);
     let f = flag_field("flags", "slot_claim_count").unwrap();
@@ -107,7 +108,7 @@ mod tests {
   #[test]
   fn flags_word_fits_u32() {
     // The propagating word's highest declared bit must be < 32.
-    for name in ["player_owned", "surface_locked", "dead", "pos_need", "pos_want", "zone_born"] {
+    for name in ["surface_locked", "dead", "pos_need", "pos_want", "zone_born"] {
       assert!(flag_bit("flags", name).unwrap() < 32);
     }
     for name in [

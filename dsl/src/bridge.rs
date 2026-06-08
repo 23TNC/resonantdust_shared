@@ -126,6 +126,24 @@ fn satisfies_closure(bundle: &Bundle, name: &str) -> Vec<String> {
   out
 }
 
+/// Decode a card row's packed `stock` u32 into the positional per-slot values
+/// [`stock_schema`] / [`card_view`] expect (one entry per declared `stock`
+/// aspect, in declaration order). Each slot occupies its `bits` width at the
+/// cumulative offset of the slots before it (so the first declared aspect is the
+/// low bits — the zone-savable end). Pass the result as [`Card::stock`] to read a
+/// card's PER-INSTANCE stock aspects in a recipe.
+pub fn stock_to_vec(bundle: &Bundle, card: &str, stock: u32) -> Vec<i64> {
+  let mut out = Vec::new();
+  let mut shift = 0u32;
+  for (_aspect, bits) in stock_schema(bundle, card) {
+    let bits = bits.clamp(0, 32) as u32;
+    let mask = if bits >= 32 { u32::MAX } else { (1u32 << bits) - 1 };
+    out.push(((stock >> shift.min(31)) & mask) as i64);
+    shift += bits;
+  }
+  out
+}
+
 /// The def-level default values of a card's first two stock slots (the Zone's
 /// budget) — what a freshly-spawned tile seeds before any `@init` climate pass.
 /// In the DSL the `stock` op initialises a slot to `0`, so this is `(0, 0)`
@@ -148,6 +166,33 @@ pub fn stock_defaults(bundle: &Bundle, card: &str) -> (u8, u8) {
   (read(0), read(1))
 }
 
+/// The card's full default `stock` u32: each stock slot's `@define` default
+/// value (`<v> &aspect.<name> set` after the `stock` declaration, else 0) packed
+/// at its cumulative bit offset. This is what a freshly-spawned card's `stock`
+/// row field is seeded to (the gate injects it at create time; the shard is
+/// content-agnostic). [`stock_defaults`] is the legacy u4×2 zone view of the same
+/// thing; this is the whole u32.
+pub fn stock_default_u32(bundle: &Bundle, card: &str) -> u32 {
+  let mut store = Store::default();
+  if let Some(define) = bundle.card(card).and_then(|d| d.facet("data")).and_then(|f| f.hook("define")) {
+    let _ = run(&define.body, &mut store, &[], &bundle.catalog, &Functions::default());
+  }
+  let mut out = 0u32;
+  let mut shift = 0u32;
+  for (aspect, bits) in stock_schema(bundle, card) {
+    let width = bits.clamp(0, 32) as u32;
+    let cap: u32 = if width >= 32 { u32::MAX } else { (1u32 << width) - 1 };
+    let val = store
+      .read(&format!("aspect.{aspect}"))
+      .map(Cell::as_int)
+      .unwrap_or(0)
+      .clamp(0, cap as i64) as u32;
+    out |= (val & cap) << shift.min(31);
+    shift += width;
+  }
+  out
+}
+
 /// Whether `aspect` rolls up to `ancestor` (equal, or `ancestor` is in its
 /// `satisfies` closure). The DSL equivalent of legacy `is_aspect_descendant`.
 pub fn is_descendant(bundle: &Bundle, aspect: &str, ancestor: &str) -> bool {
@@ -163,6 +208,23 @@ pub fn stock_slot_for_aspect(bundle: &Bundle, card: &str, op_aspect: &str) -> Op
   stock_schema(bundle, card).iter().position(|(aspect, _)| {
     aspect == op_aspect || satisfies_closure(bundle, aspect).iter().any(|a| a == op_aspect)
   })
+}
+
+/// The `(shift, width)` of the stock-slot on `card` that a stock op on
+/// `op_aspect` targets (same sub-aspect widening as [`stock_slot_for_aspect`]).
+/// `shift` is the cumulative bit offset of the slots before it. Lets a caller
+/// read/replace just that slot's bits in a card's `stock` u32. `None` if the
+/// card declares no matching stock slot.
+pub fn stock_slot_bits(bundle: &Bundle, card: &str, op_aspect: &str) -> Option<(u32, u32)> {
+  let mut shift = 0u32;
+  for (aspect, bits) in stock_schema(bundle, card) {
+    let width = bits.clamp(0, 32) as u32;
+    if aspect == op_aspect || satisfies_closure(bundle, &aspect).iter().any(|a| a == op_aspect) {
+      return Some((shift, width));
+    }
+    shift += width;
+  }
+  None
 }
 
 /// Assemble an operating-set frame: write each card's [`card_view`] at its slot
@@ -367,5 +429,19 @@ mod tests {
     let mut frame = operating_set(&b, &[("slot.1.0", &corpus)]);
     let plan = match_recipe(input, &mut frame, &b.catalog, &b.functions).unwrap();
     assert!(!plan.matched, "corpus must not match $card::apple");
+  }
+
+  #[test]
+  fn stock_default_u32_packs_define_defaults() {
+    // grove (pine 2b, ash 2b) sets no defaults → 0.
+    let b = bundle();
+    assert_eq!(stock_default_u32(&b, "grove"), 0);
+
+    // `w`: slot a (2b, default 3) then slot b (3b, default 5), packed in order.
+    let aspects = "<aspect>\n  ::a>\n    @define>\n      aspects &section set\n  ::b>\n    @define>\n      aspects &section set\n";
+    let cards = "<card>\n  ::w>\n    :data>\n      @define>\n        2 &aspect.a stock\n        3 &aspect.a set\n        3 &aspect.b stock\n        5 &aspect.b set\n";
+    let b = load(&[("a.rd".into(), aspects.into()), ("c.rd".into(), cards.into())]).unwrap();
+    // a=3 at shift 0 (2b), b=5 at shift 2 (3b) → 3 | (5<<2) = 23.
+    assert_eq!(stock_default_u32(&b, "w"), 0b1_0111);
   }
 }
