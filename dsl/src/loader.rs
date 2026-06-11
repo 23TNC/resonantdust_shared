@@ -209,16 +209,46 @@ impl Bundle {
   /// only be consumed by this recipe (`recipe_state::validate_bindings`). `None`
   /// if the packed def is unknown or declares no magnetic recipe.
   pub fn magnetic_recipe_id(&self, packed: u16) -> Option<u16> {
-    let name = self.name_for_packed(packed)?;
-    let define = self.card(name)?.facet("data")?.hook("define")?;
-    let mut s = crate::vm::Store::default();
-    let _ = crate::vm::run(&define.body, &mut s, &[], &self.catalog, &self.functions);
-    match s.read("magnetic.recipe")? {
+    match self.magnetic_store(packed)?.read("magnetic.recipe")? {
       crate::vm::Cell::Sym(sym) => {
         self.recipe_def_id(sym.strip_prefix("recipe::").unwrap_or(&sym))
       }
       _ => None,
     }
+  }
+
+  /// Run a magnetic card's `:data @define` into a fresh store so its
+  /// `magnetic.*` slots (recipe / failure / radius / duration) can be read.
+  /// `None` if the packed def is unknown.
+  fn magnetic_store(&self, packed: u16) -> Option<crate::vm::Store> {
+    let name = self.name_for_packed(packed)?;
+    let define = self.card(name)?.facet("data")?.hook("define")?;
+    let mut s = crate::vm::Store::default();
+    let _ = crate::vm::run(&define.body, &mut s, &[], &self.catalog, &self.functions);
+    Some(s)
+  }
+
+  /// The fallback recipe id a magnet fires when its resolution window lapses
+  /// (`$recipe::<x> &magnetic.failure set`). `None` if unset / unknown.
+  pub fn magnetic_failure_recipe_id(&self, packed: u16) -> Option<u16> {
+    match self.magnetic_store(packed)?.read("magnetic.failure")? {
+      crate::vm::Cell::Sym(sym) => {
+        self.recipe_def_id(sym.strip_prefix("recipe::").unwrap_or(&sym))
+      }
+      _ => None,
+    }
+  }
+
+  /// The magnet's reach in tiles (`N &magnetic.radius set`) — the hex-disk
+  /// radius within which it attracts candidate cards. `None` if unset.
+  pub fn magnetic_radius(&self, packed: u16) -> Option<i32> {
+    Some(self.magnetic_store(packed)?.read("magnetic.radius")?.as_int() as i32)
+  }
+
+  /// The magnet's resolution window in ms (`N &magnetic.duration set`) — the
+  /// deadline by which the success recipe must complete or failure fires.
+  pub fn magnetic_duration_ms(&self, packed: u16) -> Option<u64> {
+    Some(self.magnetic_store(packed)?.read("magnetic.duration")?.as_int() as u64)
   }
 
   /// The blueprint *card* a blueprint spawns into the wrench panel on request.

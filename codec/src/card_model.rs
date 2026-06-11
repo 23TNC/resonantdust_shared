@@ -200,6 +200,18 @@ pub fn is_dead(flags: u32) -> bool {
     flags & layout().dead != 0
 }
 
+/// `flags.pos_need` — the server REQUIRES this card's position (a spawn or an
+/// authoritative relocation). A client with a pending local move must adopt it.
+pub fn pos_need(flags: u32) -> bool {
+    flags & layout().pos_need != 0
+}
+
+/// `flags.pos_want` — the server's position is advisory (set on recipe outputs).
+/// A client holding a pending local move (dirty position) keeps its own.
+pub fn pos_want(flags: u32) -> bool {
+    flags & layout().pos_want != 0
+}
+
 /// Whether a card is ineligible to be bound into ANY new action, verb-independent:
 /// it's `dead` (destroyed) or exclusively `slot_claim`-held by an in-flight action.
 /// The shared baseline both sides apply — the gate's `check_card` gates on it
@@ -281,6 +293,11 @@ struct FlagsLayout {
     hold_counts_mask: u32,
     // single-bit state
     dead: u32,
+    /// `flags.pos_need` — the server REQUIRES this position (authoritative).
+    pos_need: u32,
+    /// `flags.pos_want` — the server's position is advisory (a recipe output);
+    /// a client holding a pending local move keeps its own.
+    pos_want: u32,
     /// Union of the bit-diff-propagated state bits.
     state_mask: u32,
     /// `dead | pos_need | pos_want` — blocks demotion back to a tile slot.
@@ -330,6 +347,8 @@ fn layout() -> &'static FlagsLayout {
             server,
             hold_counts_mask,
             dead,
+            pos_need,
+            pos_want,
             state_mask: dead | pos_need | pos_want | surface_locked | zone_born,
             demote_blocking: dead | pos_need | pos_want,
         }

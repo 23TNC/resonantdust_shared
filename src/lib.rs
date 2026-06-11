@@ -2,20 +2,20 @@
 //!
 //! Compiled to a browser wasm bundle (see the `wasm` service in `compose.yml`)
 //! and imported by the pixijs client. The server does NOT consume this crate —
-//! it links `resonantdust-data` directly as an rlib. The bindings live only
-//! here, where they're needed.
+//! it links the shared logic crates (`resonantdust-codec`, `-dsl`, …) directly
+//! as rlibs. The bindings live only here, where they're needed.
 //!
 //! The substance ([`Content`] and its methods) is plain Rust — feature-
 //! independent, so `cargo check`/`test` exercise it natively without the wasm
 //! toolchain. The browser surface is a thin `#[wasm_bindgen]` layer, gated on
 //! `js`, that marshals JSON in/out and delegates to the plain methods.
 
-use resonantdust_data::bridge::{card_view, operating_set, Card};
-use resonantdust_data::defs;
-use resonantdust_data::loader::{load, Bundle};
-use resonantdust_data::locales::Locales as DataLocales;
-use resonantdust_data::vm::{match_recipe as vm_match, plan_recipe as vm_plan, Cell, Plan};
-use resonantdust_data::worldgen;
+use resonantdust_dsl::bridge::{card_view, operating_set, Card};
+use resonantdust_dsl::defs;
+use resonantdust_dsl::loader::{load, Bundle};
+use resonantdust_dsl::locales::Locales as DataLocales;
+use resonantdust_dsl::vm::{match_recipe as vm_match, plan_recipe as vm_plan, Cell, Plan};
+use resonantdust_dsl::worldgen;
 
 #[cfg(feature = "js")]
 use wasm_bindgen::prelude::*;
@@ -291,7 +291,7 @@ impl Content {
     #[wasm_bindgen(js_name = generateTile)]
     pub fn generate_tile_js(&self, q: i32, r: i32, seed: f64) -> u16 {
         let (def_id, [s0, s1]) = self.generate_tile(q, r, seed as u64);
-        resonantdust_data::bits::pack_tile_slot(def_id, s0, s1)
+        resonantdust_codec::bits::pack_tile_slot(def_id, s0, s1)
     }
 
     /// `cardDef(packed)` → the render def as JSON (`null` if unknown).
@@ -409,49 +409,49 @@ impl Content {
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagBit)]
 pub fn card_flag_bit(name: &str) -> Option<u8> {
-    resonantdust_data::inspect::card_flag_bit(name)
+    resonantdust_dsl::inspect::card_flag_bit(name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagBitIn)]
 pub fn card_flag_bit_in(field: &str, name: &str) -> Option<u8> {
-    resonantdust_data::flags::flag_bit(field, name)
+    resonantdust_codec::flags::flag_bit(field, name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagFieldShape)]
 pub fn card_flag_field_shape(field: &str, name: &str) -> Option<Vec<u8>> {
-    resonantdust_data::inspect::card_flag_field_shape(field, name).map(|(s, w)| vec![s, w])
+    resonantdust_dsl::inspect::card_flag_field_shape(field, name).map(|(s, w)| vec![s, w])
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = hasCardFlag)]
 pub fn has_card_flag(flags: u32, flags_bk: u32, name: &str) -> bool {
-    resonantdust_data::inspect::has_card_flag(flags, flags_bk, name)
+    resonantdust_dsl::inspect::has_card_flag(flags, flags_bk, name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagFieldValueIn)]
 pub fn card_flag_field_value_in(field: &str, host: u32, name: &str) -> Option<u32> {
-    resonantdust_data::inspect::card_flag_field_value_in(field, host, name)
+    resonantdust_dsl::inspect::card_flag_field_value_in(field, host, name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardFlagFieldValueAny)]
 pub fn card_flag_field_value_any(flags: u32, stock: u32, name: &str) -> Option<u32> {
-    resonantdust_data::inspect::card_flag_field_value_any(flags, stock, name)
+    resonantdust_dsl::inspect::card_flag_field_value_any(flags, stock, name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = cardTypeId)]
 pub fn card_type_id(name: &str) -> Option<u8> {
-    resonantdust_data::inspect::card_type_id(name)
+    resonantdust_dsl::inspect::card_type_id(name)
 }
 
 #[cfg(feature = "js")]
 #[wasm_bindgen(js_name = isHexType)]
 pub fn is_hex_type(type_id: u8) -> bool {
-    resonantdust_data::inspect::is_hex_type(type_id)
+    resonantdust_dsl::inspect::is_hex_type(type_id)
 }
 
 // ---------- Tests ----------

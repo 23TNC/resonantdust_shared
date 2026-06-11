@@ -43,6 +43,14 @@ const AETHER_SEED_OFFSET: u64 = 0x9E1A_C401_BB18_9E5F;
 /// Fresh offset for the rarity channel (no legacy lattice to match).
 const RARITY_SEED_OFFSET: u64 = 0xD1B5_4A32_D192_ED03;
 
+/// Tree-cluster mask — FINER than every climate axis (groves a few cells across,
+/// ~7-cell period) so forests read as clumps of trees with clearings between, not
+/// region-scale all-or-nothing blobs. NOT a climate axis (absent from
+/// `climate_floats`/`AXIS_COUNT`); `biome_host` samples it directly and exposes it
+/// as `*biome.cluster` for `@init` stock to scatter against.
+const CLUSTER_BASE_SCALE: f32 = 1.0 / 7.0;
+const CLUSTER_SEED_OFFSET: u64 = 0x37E5_2C0A_9B41_D6F1;
+
 /// Number of axes in [`climate_ints`]: elevation, temperature, humidity,
 /// aether, rarity.
 pub const AXIS_COUNT: usize = 5;
@@ -121,6 +129,11 @@ pub fn sample_aether(global_q: i32, global_r: i32, seed: u64) -> f32 {
 /// Sample rarity `∈ [0, 1)` — the DSL-only channel (no legacy lattice).
 pub fn sample_rarity(global_q: i32, global_r: i32, seed: u64) -> f32 {
   sample_axis(global_q, global_r, seed, RARITY_BASE_SCALE, RARITY_SEED_OFFSET)
+}
+/// Sample the tree-cluster mask `∈ [0, 1)` — fine scale (groves), not a biome
+/// selector. `biome_host` exposes it as `*biome.cluster` for stock clustering.
+pub fn sample_cluster(global_q: i32, global_r: i32, seed: u64) -> f32 {
+  sample_axis(global_q, global_r, seed, CLUSTER_BASE_SCALE, CLUSTER_SEED_OFFSET)
 }
 
 /// Scale an `f32 ∈ [0, 1)` sample to the `0..=99` integer the DSL envelopes and

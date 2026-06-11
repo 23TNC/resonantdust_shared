@@ -257,17 +257,44 @@ pub fn pack_macro_zone_full(owner: u32, surface: u8, q: i16, r: i16) -> u64 {
     with_owner(with_surface(pack_macro_zone(q, r), surface), owner)
 }
 
+/// Tiles per macro_zone edge (the zone is `ZONE_SIZE × ZONE_SIZE` tiles). Odd so
+/// the owner-origin tile can sit at the exact centre — see [`TILE_CENTER`].
+pub const ZONE_SIZE: i32 = 7;
+
+/// The tile→local CENTERING offset — the tile-level analog of [`REGION_CENTER`].
+/// The owner-origin world tile `(0, 0)` lands at the zone's **exact centre** local
+/// cell `(3, 3)` instead of the `(0, 0)` corner, so a small disk (`Region.distance`)
+/// grows symmetrically and fits inside a single macro_zone rather than spilling
+/// into its four quadrant neighbours.
+pub const TILE_CENTER: i32 = 3;
+
+/// The global world-tile coordinate of macro_zone slot `(zone, local)` along one
+/// axis: `zone*ZONE_SIZE + local − TILE_CENTER`. The single place the zone→tile
+/// fold lives — pair the q and r results. Inverse: [`zone_local`].
+pub fn world_tile(zone: i16, local: u8) -> i32 {
+    zone as i32 * ZONE_SIZE + local as i32 - TILE_CENTER
+}
+
+/// Inverse of [`world_tile`]: the `(zone, local)` a global world-tile coordinate
+/// falls in, along one axis. Euclidean div/rem so negatives floor toward −∞ and
+/// `local` stays `0..ZONE_SIZE`.
+pub fn zone_local(global: i32) -> (i16, u8) {
+    let shifted = global + TILE_CENTER;
+    (shifted.div_euclid(ZONE_SIZE) as i16, shifted.rem_euclid(ZONE_SIZE) as u8)
+}
+
 // ---- macro_region ------------------------------------------------------
 //
-// A `Region` covers a `REGION_SIZE × REGION_SIZE` block of zones (8×8 = 64),
+// A `Region` covers a `REGION_SIZE × REGION_SIZE` block of zones (7×7 = 49),
 // tracking per-zone spawn presence/availability as two u64 bitfields. Its
 // `macro_region` key is bit-identical to `macro_zone` — same `[card_id:u32 |
 // surface:u8 | region_q:i12 | region_r:i12]` layout — only the coordinate
 // scale differs (region units, where 1 region = 8 zones). So it reuses the
 // `macro_zone` combiners verbatim.
 
-/// Zones per region edge (region is `REGION_SIZE × REGION_SIZE` zones).
-pub const REGION_SIZE: i16 = 8;
+/// Zones per region edge (region is `REGION_SIZE × REGION_SIZE` zones). Odd so a
+/// macro_zone can sit at the exact centre slot — see [`REGION_CENTER`].
+pub const REGION_SIZE: i16 = 7;
 
 /// Build a `macro_region` from its fields. Same layout as `macro_zone`;
 /// `(region_q, region_r)` are in region units. World uses `card_id = 0`.
@@ -275,24 +302,47 @@ pub fn pack_macro_region(card_id: u32, surface: u8, region_q: i16, region_r: i16
     pack_macro_zone_full(card_id, surface, region_q, region_r)
 }
 
+/// The macro_zone→region-slot CENTERING offset. The region grid is shifted by
+/// `REGION_CENTER` zones so macro_zone `(0, 0)` — every container's owner-origin
+/// — lands at the region's **exact centre** slot `(3, 3)` of the 7×7 grid instead
+/// of the `(0, 0)` corner. That centres the origin in its region, so a per-region
+/// disk (`Region.distance`) grows symmetrically ~3 zones in every direction
+/// before spilling to a neighbour region. Applied uniformly to all surfaces; the
+/// world doesn't care (its presence is full and worldgen keys on absolute coords).
+pub const REGION_CENTER: i16 = 3;
+
 /// Map a `macro_zone` to its containing `(macro_region, bit)`, where `bit`
-/// (`0..63`) indexes the zone's slot inside the region's 64-bit
+/// (`0..48`) indexes the zone's slot inside the region's 64-bit
 /// presence/availability fields. Bit layout is row-major over the region's
-/// 8×8 zones: `bit = local_r * REGION_SIZE + local_q`, so bit `i` ↔ the zone
-/// at `(region_q*8 + i % 8, region_r*8 + i / 8)`. `card_id` and `surface` are
-/// carried through unchanged, so a non-world zone maps to its own owner's /
-/// surface's region.
+/// 7×7 zones: `bit = local_r * REGION_SIZE + local_q`. With the [`REGION_CENTER`]
+/// shift, bit `i` ↔ the zone at `(region_q*7 + i%7 − 3, region_r*7 + i/7 − 3)`,
+/// and macro_zone `(0,0)` ↔ region `(0,0)` slot `(3,3)` (bit 24). `card_id` and
+/// `surface` are carried through unchanged, so a non-world zone maps to its own
+/// owner's / surface's region.
 pub fn region_of_zone(macro_zone: u64) -> (u64, u8) {
     let (zq, zr) = unpack_macro_zone(macro_zone);
     let card_id = owner_of(macro_zone);
     let surface = surface_of(macro_zone);
-    // Euclidean div/rem so negative coords floor toward -inf and locals stay 0..7.
-    let region_q = zq.div_euclid(REGION_SIZE);
-    let region_r = zr.div_euclid(REGION_SIZE);
-    let local_q = zq.rem_euclid(REGION_SIZE);
-    let local_r = zr.rem_euclid(REGION_SIZE);
+    // Shift by REGION_CENTER, then Euclidean div/rem so negative coords floor
+    // toward -inf and locals stay 0..6. macro_zone (0,0) → local (3,3).
+    let sq = zq + REGION_CENTER;
+    let sr = zr + REGION_CENTER;
+    let region_q = sq.div_euclid(REGION_SIZE);
+    let region_r = sr.div_euclid(REGION_SIZE);
+    let local_q = sq.rem_euclid(REGION_SIZE);
+    let local_r = sr.rem_euclid(REGION_SIZE);
     let bit = (local_r * REGION_SIZE + local_q) as u8;
     (pack_macro_region(card_id, surface, region_q, region_r), bit)
+}
+
+/// Inverse of [`region_of_zone`]'s slot indexing: the `macro_zone` for a given
+/// region's `(region_q, region_r)` and bit slot. Undoes the [`REGION_CENTER`]
+/// shift. Used server-side to walk a region's 49 zone slots when computing
+/// presence from a disk `distance`.
+pub fn zone_of_region_slot(region_q: i16, region_r: i16, bit: u8) -> (i16, i16) {
+    let local_q = (bit % REGION_SIZE as u8) as i16;
+    let local_r = (bit / REGION_SIZE as u8) as i16;
+    (region_q * REGION_SIZE + local_q - REGION_CENTER, region_r * REGION_SIZE + local_r - REGION_CENTER)
 }
 
 // ---- stack branch directions -------------------------------------------
@@ -502,9 +552,9 @@ pub fn unpack_recipe(v: u16) -> (u8, u8, u16) {
     )
 }
 
-// ---- zone tile storage (16 u64 holding 64 u16 tile slots) ------------
+// ---- zone tile storage (13 u64 holding 49 u16 tile slots) ------------
 //
-// Each zone has 64 tiles (8 × 8 grid). Each tile slot is u16 wide:
+// Each zone has 49 tiles (7 × 7 grid). Each tile slot is u16 wide:
 //
 //     [ def_id:u12 | stock0:u2 | stock1:u2 ]
 //
@@ -514,15 +564,26 @@ pub fn unpack_recipe(v: u16) -> (u8, u8, u16) {
 //     def's declared row-mutable aspect slots (see
 //     `CardDefinition.stock`). The def maps slot index → aspect.
 //
-// 64 tiles × 16 bits = 1024 bits = exactly 16 u64. 8 tiles per row =
-// 128 bits = 2 u64 per row, no boundary straddling — unlike the u12
-// layout this replaces. See docs/TILE_ASPECTS.md.
+// 49 tiles × 16 bits = 784 bits → 13 u64 (12 hold 4 tiles each, the
+// 13th holds 1). 16 bits divides 64, so a tile never straddles a u64
+// boundary even though 49 isn't a multiple of 4. Repacked from the
+// 8-strided / 16-u64 layout the 7×7 cutover first truncated into.
 
 /// Number of u64 fields in the zone tile-data packing.
-pub const ZONE_TILE_U64_COUNT: usize = 16;
+pub const ZONE_TILE_U64_COUNT: usize = 13;
 
-/// Number of tiles per zone (8 × 8 grid).
-pub const ZONE_TILE_COUNT: usize = 64;
+/// Tiles per zone — the 7×7 logical grid, packed tight (no dead slots).
+pub const ZONE_TILE_COUNT: usize = 49;
+
+/// Row width of the tile storage — now equal to [`ZONE_SIZE`] (7); the store is
+/// tight to the logical grid.
+pub const ZONE_STORAGE_STRIDE: usize = 7;
+
+/// Storage slot index for a tile at local cell `(local_q, local_r)`, row-major
+/// over the 7-wide store.
+pub fn tile_slot(local_q: u8, local_r: u8) -> usize {
+    local_r as usize * ZONE_STORAGE_STRIDE + local_q as usize
+}
 
 /// Bit width of a single tile slot (def_id + two stocks).
 pub const ZONE_TILE_BITS: usize = 16;
@@ -538,7 +599,7 @@ pub const ZONE_TILE_STOCK_MAX: u8 = 0x3;
 /// to the tile's bit offset).
 const TILE_MASK: u64 = 0xFFFF;
 
-/// Read tile `idx` (0..64) — returns `(def_id, stock0, stock1)`.
+/// Read tile `idx` (0..49) — returns `(def_id, stock0, stock1)`.
 pub fn tile_full(packed: &[u64; ZONE_TILE_U64_COUNT], idx: usize) -> (u16, u8, u8) {
     debug_assert!(idx < ZONE_TILE_COUNT, "tile index {} out of range", idx);
     let u64_idx = idx / 4; // 4 tiles per u64
@@ -604,13 +665,12 @@ pub fn set_tile_stock(
     packed[u64_idx] = (packed[u64_idx] & !mask) | v;
 }
 
-/// Decode one row of 8 tiles. Returns `(def_id, stock0, stock1)` per
-/// column, row-major (row 0 = tile indices 0..=7, row 1 = 8..=15,
-/// etc.).
-pub fn tile_row(packed: &[u64; ZONE_TILE_U64_COUNT], row: usize) -> [(u16, u8, u8); 8] {
-    let mut out = [(0u16, 0u8, 0u8); 8];
-    let base = row * 8;
-    for col in 0..8 {
+/// Decode one row of [`ZONE_STORAGE_STRIDE`] (7) tiles. Returns `(def_id, stock0,
+/// stock1)` per column, row-major (row 0 = tile indices 0..=6, row 1 = 7..=13, …).
+pub fn tile_row(packed: &[u64; ZONE_TILE_U64_COUNT], row: usize) -> [(u16, u8, u8); ZONE_STORAGE_STRIDE] {
+    let mut out = [(0u16, 0u8, 0u8); ZONE_STORAGE_STRIDE];
+    let base = row * ZONE_STORAGE_STRIDE;
+    for col in 0..ZONE_STORAGE_STRIDE {
         out[col] = tile_full(packed, base + col);
     }
     out
@@ -619,10 +679,10 @@ pub fn tile_row(packed: &[u64; ZONE_TILE_U64_COUNT], row: usize) -> [(u16, u8, u
 pub fn set_tile_row(
     packed: &mut [u64; ZONE_TILE_U64_COUNT],
     row: usize,
-    slots: &[(u16, u8, u8); 8],
+    slots: &[(u16, u8, u8); ZONE_STORAGE_STRIDE],
 ) {
-    debug_assert!(row < 8, "row {} out of range", row);
-    let base = row * 8;
+    debug_assert!(row < ZONE_STORAGE_STRIDE, "row {} out of range", row);
+    let base = row * ZONE_STORAGE_STRIDE;
     for (col, (def_id, stock0, stock1)) in slots.iter().enumerate() {
         set_tile_full(packed, base + col, *def_id, *stock0, *stock1);
     }
@@ -698,33 +758,37 @@ mod tests {
 
     #[test]
     fn region_of_zone_origin_block() {
-        // The origin 8×8 block (world chunks q,r ∈ 0..7) all maps to region
-        // (0,0); corners hit bit 0 and bit 63.
+        // The origin 7×7 block (zones q,r ∈ -3..3) all maps to region (0,0). The
+        // owner-origin (0,0) lands at the CENTRE slot (3,3) = bit 24; corners at
+        // bit 0 (-3,-3) and bit 48 (3,3) — see REGION_CENTER.
         let region00 = pack_macro_region(0, WORLD_LAYER, 0, 0);
         let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 0, 0));
         assert_eq!(mr, region00);
+        assert_eq!(bit, 24); // local (3,3) → 3*7 + 3
+        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, -3, -3));
+        assert_eq!(mr, region00);
         assert_eq!(bit, 0);
-        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 7, 7));
+        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 3, 3));
         assert_eq!(mr, region00);
-        assert_eq!(bit, 63);
-        // Row-major: (local_q=3, local_r=1) → bit 1*8 + 3 = 11.
-        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 3, 1));
+        assert_eq!(bit, 48); // local (6,6) → 6*7 + 6
+        // Row-major: zone (0,-2) → local (3,1) → bit 1*7 + 3 = 10.
+        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 0, -2));
         assert_eq!(mr, region00);
-        assert_eq!(bit, 11);
+        assert_eq!(bit, 10);
     }
 
     #[test]
     fn region_of_zone_boundary_and_negative() {
-        // zq=8 crosses into region (1,0), local bit 0.
-        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 8, 0));
+        // zq=4 crosses into region (1,0): 4+3=7 → region 1, local 0.
+        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, 4, -3));
         assert_eq!(mr, pack_macro_region(0, WORLD_LAYER, 1, 0));
         assert_eq!(bit, 0);
-        // Negative coords floor toward -inf: zq=-1 → region (-1), local 7.
-        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, -1, -1));
+        // Negative coords floor toward -inf: zone (-4,-4) → region (-1,-1), local (6,6).
+        let (mr, bit) = region_of_zone(pack_macro_zone_full(0, WORLD_LAYER, -4, -4));
         assert_eq!(mr, pack_macro_region(0, WORLD_LAYER, -1, -1));
-        assert_eq!(bit, 7 * REGION_SIZE as u8 + 7); // (local_q=7, local_r=7) → 63
+        assert_eq!(bit, 6 * REGION_SIZE as u8 + 6); // local (6,6) → 48
         // card_id + surface carry through to the region key.
-        let (mr, _) = region_of_zone(pack_macro_zone_full(1024, MINI_ZONE_LAYER, 9, 2));
+        let (mr, _) = region_of_zone(pack_macro_zone_full(1024, MINI_ZONE_LAYER, 5, 2));
         assert_eq!(mr, pack_macro_region(1024, MINI_ZONE_LAYER, 1, 0));
     }
 
@@ -854,11 +918,11 @@ mod tests {
         // 4 / 6 / 7 still report zero.
         let mut packed = [0u64; ZONE_TILE_U64_COUNT];
         set_tile_full(&mut packed, 5, 0xABC, 2, 1);
-        for &idx in &[0, 4, 6, 7, 8, 63] {
+        for &idx in &[0, 4, 6, 7, 8, 48] {
             assert_eq!(tile_full(&packed, idx), (0, 0, 0));
         }
         set_tile_stock(&mut packed, 5, 0, 0);
-        for &idx in &[0, 4, 6, 7, 8, 63] {
+        for &idx in &[0, 4, 6, 7, 8, 48] {
             assert_eq!(tile_full(&packed, idx), (0, 0, 0));
         }
         // tile 5 retained its def + slot 1 stock.
@@ -903,7 +967,7 @@ mod tests {
     #[test]
     fn tile_row_decode() {
         let mut packed = [0u64; ZONE_TILE_U64_COUNT];
-        for col in 0..8 {
+        for col in 0..ZONE_STORAGE_STRIDE {
             set_tile_full(&mut packed, col, 100 + col as u16, 1, 2);
         }
         let row0 = tile_row(&packed, 0);
@@ -912,6 +976,6 @@ mod tests {
         }
         // Row 1 is still empty.
         let row1 = tile_row(&packed, 1);
-        assert_eq!(row1, [(0, 0, 0); 8]);
+        assert_eq!(row1, [(0, 0, 0); ZONE_STORAGE_STRIDE]);
     }
 }

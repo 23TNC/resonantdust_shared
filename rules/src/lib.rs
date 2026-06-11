@@ -8,4 +8,3 @@
 //! (CardStore), and `codec` (plan).
 
 pub mod dsl_recipe;
-pub mod stacking;

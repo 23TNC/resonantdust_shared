@@ -21,6 +21,9 @@ use crate::vm::{run, Catalog, Cell, Functions, Store};
 /// axes as `0..=99` ints (D2); `^seed` is the cell's [`noise::cell_seed`].
 pub fn biome_host(global_q: i32, global_r: i32, seed: u64) -> Vec<(String, Cell)> {
   let [elev, temp, humid, aeth, rar] = noise::climate_floats(global_q, global_r, seed);
+  // Fine-scale tree-cluster mask (not a climate axis) — `@init` stock scatters
+  // against it so forests grow in groves, not a tree on every tile.
+  let cluster = noise::sample_cluster(global_q, global_r, seed) as f64 * 100.0;
   vec![
     (
       "biome".into(),
@@ -30,6 +33,7 @@ pub fn biome_host(global_q: i32, global_r: i32, seed: u64) -> Vec<(String, Cell)
         ("temperature".into(), Cell::Float(temp)),
         ("humidity".into(), Cell::Float(humid)),
         ("aether".into(), Cell::Float(aeth)),
+        ("cluster".into(), Cell::Float(cluster)),
       ]),
     ),
     ("seed".into(), Cell::Int(noise::cell_seed(global_q, global_r, seed))),

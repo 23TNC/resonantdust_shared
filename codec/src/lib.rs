@@ -11,3 +11,4 @@ pub mod card_model;
 pub mod flags;
 pub mod packed;
 pub mod plan;
+pub mod stacking;

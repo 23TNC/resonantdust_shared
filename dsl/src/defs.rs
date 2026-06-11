@@ -20,6 +20,8 @@ pub struct StockSlot {
   pub max: i64,
   /// Seed value the `:data @define` set the aspect to.
   pub default: i64,
+  /// Display visibility — `:visuals` override or the aspect's registry default.
+  pub visibility: u8,
 }
 
 /// A card's render/UI definition, derived from its `.rd` facets.
@@ -41,9 +43,10 @@ pub struct CardRenderDef {
   pub texture: Option<String>,
   /// Card-art asset names (from `&objects`), in order.
   pub objects: Vec<String>,
-  /// Static `(aspect, value)` pairs from `:data @define` (excludes the `type`
-  /// symbol; includes numeric aspects like `cost`, `wood`, …).
-  pub aspects: Vec<(String, i64)>,
+  /// Static `(aspect, value, visibility)` triples from `:data @define` (excludes
+  /// the `type` symbol; includes numeric aspects like `cost`, `wood`, …). The
+  /// visibility is the card's `:visuals` override or the aspect's registry default.
+  pub aspects: Vec<(String, i64, u8)>,
   /// Row-mutable stock slots (positional, mapping to the zone's per-tile slots).
   pub stock: Vec<StockSlot>,
   /// Magnetic lifecycle recipe name (`&magnetic.recipe`), or `None`.
@@ -60,8 +63,9 @@ pub struct AspectInfo {
   pub icon: String,
   /// `0xRRGGBB` (inherited if omitted), or `0` if none in the chain.
   pub color: i64,
-  /// `"aspects"` | `"features"` | `"traits"` (the `&section`).
-  pub section: String,
+  /// Default display visibility (`&visibility`): `0` hidden · `1` aspect slot ·
+  /// `2` function slot. A card's `:visuals` can override per aspect. Absent = `1`.
+  pub visibility: u8,
   /// Aspects this one IS-A (`&satisfies` names), for matcher widening + display.
   pub satisfies: Vec<String>,
   /// Render sprite asset name (`&art`), or `None`.
@@ -352,11 +356,20 @@ pub fn card_render_def(bundle: &Bundle, packed: u16) -> Option<CardRenderDef> {
   // from the slot, not the meaningless static `0` the `stock` verb seeds (the
   // per-tile value is filled by @init at worldgen and stored in the zone /
   // tile-card, not the static def).
+  // Effective display visibility for an aspect: the card's `:visuals` override,
+  // else the aspect's registry default (1 = aspect slot if unknown).
+  let visibility_of = |aspect: &str| -> u8 {
+    vis.read(&format!("visibility.{aspect}"))
+      .map(|c| c.as_int() as u8)
+      .or_else(|| aspect_info(bundle, aspect).map(|i| i.visibility))
+      .unwrap_or(1)
+  };
   let stock: Vec<StockSlot> = crate::bridge::stock_schema(bundle, &name)
     .into_iter()
     .map(|(aspect, max)| {
       let default = data.read(&format!("aspect.{aspect}")).map(Cell::as_int).unwrap_or(0);
-      StockSlot { aspect, max, default }
+      let visibility = visibility_of(&aspect);
+      StockSlot { aspect, max, default, visibility }
     })
     .collect();
   let is_stock = |k: &str| stock.iter().any(|s| s.aspect == k);
@@ -369,8 +382,8 @@ pub fn card_render_def(bundle: &Bundle, packed: u16) -> Option<CardRenderDef> {
         return None;
       }
       match c {
-        Cell::Int(n) => Some((k.clone(), *n)),
-        Cell::Ranged { val, .. } => Some((k.clone(), *val)),
+        Cell::Int(n) => Some((k.clone(), *n, visibility_of(k))),
+        Cell::Ranged { val, .. } => Some((k.clone(), *val, visibility_of(k))),
         _ => None,
       }
     }).collect(),
@@ -670,7 +683,7 @@ pub fn aspect_info(bundle: &Bundle, name: &str) -> Option<AspectInfo> {
     name: name.to_string(),
     icon: inherited("icon").and_then(|c| match c { Cell::Sym(s) => Some(s), _ => None }).unwrap_or_default(),
     color: inherited("color").map(|c| c.as_int()).unwrap_or(0),
-    section: sym(field("section")).unwrap_or_default(),
+    visibility: field("visibility").map(|c| c.as_int() as u8).unwrap_or(1),
     satisfies,
     art: sym(field("art")).map(|s| strip(&s, "asset::").to_string()),
   })
@@ -696,6 +709,23 @@ pub fn aspect_value(bundle: &Bundle, packed: u16, name: &str) -> Option<i64> {
   Store::with_root(view).read(&format!("aspect.{name}")).map(Cell::as_int)
 }
 
+/// A card's stacking bit-fields (the bundle-aware lookup behind the canonical
+/// [`resonantdust_codec::stacking`] bit math). `stack_joins` declared marks an
+/// explicit config (tiles/events join only the hex stack, `0b0010`); absent →
+/// the regular-card default (hosts `0b1110`, joins `0b1100`). `stack_hosts`
+/// defaults to 0 when only joins is set (a tile hosts nothing). Bit `i` = stack
+/// `i` (0 = loose).
+pub fn stack_bits(bundle: &Bundle, packed: u16) -> resonantdust_codec::stacking::StackBits {
+  use resonantdust_codec::stacking::{StackBits, DEFAULT_BITS};
+  match aspect_value(bundle, packed, "stack_joins") {
+    None => DEFAULT_BITS,
+    Some(joins) => StackBits {
+      hosts: aspect_value(bundle, packed, "stack_hosts").unwrap_or(0) as u8,
+      joins: joins as u8,
+    },
+  }
+}
+
 // ---------- Tests ----------
 
 #[cfg(test)]
@@ -706,12 +736,12 @@ mod tests {
   fn bundle() -> Bundle {
     let assets = "<asset>\n  ::pine>\n    @define>\n      256 &size set\n  ::log>\n    @define>\n      128 &size set\n";
     let aspects = "<aspect>\n\
-      \x20 ::wood>\n    @define>\n      aspects &section set\n      tree &icon set\n      #6B4423 &color set\n\
-      \x20 ::pine>\n    @define>\n      aspects &section set\n      1 &satisfies array\n      $aspect::wood &satisfies.0 set\n      $asset::pine &art set\n\
-      \x20 ::type>\n    @define>\n      traits &section set\n\
-      \x20 ::cost>\n    @define>\n      traits &section set\n";
+      \x20 ::wood>\n    @define>\n      1 &visibility set\n      tree &icon set\n      #6B4423 &color set\n\
+      \x20 ::pine>\n    @define>\n      1 &visibility set\n      1 &satisfies array\n      $aspect::wood &satisfies.0 set\n      $asset::pine &art set\n\
+      \x20 ::type>\n    @define>\n      0 &visibility set\n\
+      \x20 ::cost>\n    @define>\n      0 &visibility set\n";
     let cards = "<card>\n\
-      \x20 ::log>\n    :data>\n      @define>\n        requisite &aspect.type set\n        2 &aspect.wood set\n    :visuals>\n      @define>\n        $shape.rect &shape set\n        #8B5E3C &color.bg set\n        #ecd6aa &color.title set\n        #0b1426 &color.text set\n        1 &objects array\n        $asset::log &objects.0 set\n\
+      \x20 ::log>\n    :data>\n      @define>\n        requisite &aspect.type set\n        2 &aspect.wood set\n    :visuals>\n      @define>\n        $shape.rect &shape set\n        #8B5E3C &color.bg set\n        #ecd6aa &color.title set\n        #0b1426 &color.text set\n        2 &visibility.wood set\n        1 &objects array\n        $asset::log &objects.0 set\n\
       \x20 ::forest>\n    :data>\n      @define>\n        2 &aspect.pine stock\n        tile &aspect.type set\n        30 &aspect.cost set\n    :visuals>\n      @define>\n        $shape.hex &shape set\n        #0b1426 &color.bg set\n        #0b1426 &color.title set\n        #0b1426 &color.text set\n";
     load(&[("s.rd".into(), assets.into()), ("a.rd".into(), aspects.into()), ("c.rd".into(), cards.into())]).expect("load")
   }
@@ -889,9 +919,10 @@ mod tests {
     assert_eq!(d.color_bg, 0x8B5E3C);
     assert_eq!(d.color_title, 0xecd6aa);
     assert_eq!(d.objects, vec!["log".to_string()]);
-    // static aspect `wood = 2` present (type symbol excluded)
-    assert!(d.aspects.iter().any(|(k, v)| k == "wood" && *v == 2));
-    assert!(!d.aspects.iter().any(|(k, _)| k == "type"));
+    // static aspect `wood = 2` present (type symbol excluded); log's :visuals
+    // overrides wood's visibility to 2 (a function slot).
+    assert!(d.aspects.iter().any(|(k, v, vis)| k == "wood" && *v == 2 && *vis == 2));
+    assert!(!d.aspects.iter().any(|(k, _, _)| k == "type"));
   }
 
   #[test]
@@ -904,7 +935,7 @@ mod tests {
     assert_eq!(d.stock[0].aspect, "pine");
     // ...and a stock-backed aspect must NOT also appear as a static aspect
     // (else a renderer reads its static `0` default and masks the live stock).
-    assert!(!d.aspects.iter().any(|(k, _)| k == "pine"));
+    assert!(!d.aspects.iter().any(|(k, _, _)| k == "pine"));
   }
 
   #[test]
@@ -913,7 +944,7 @@ mod tests {
     let wood = aspect_info(&b, "wood").unwrap();
     assert_eq!(wood.icon, "tree");
     assert_eq!(wood.color, 0x6B4423);
-    assert_eq!(wood.section, "aspects");
+    assert_eq!(wood.visibility, 1);
     // pine omits icon/color → inherits wood's via satisfies
     let pine = aspect_info(&b, "pine").unwrap();
     assert_eq!(pine.satisfies, vec!["wood".to_string()]);

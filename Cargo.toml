@@ -1,5 +1,5 @@
 [workspace]
-members = ["codec", "protocol", "dsl", "state", "rules", "data"]
+members = ["codec", "protocol", "dsl", "state", "rules"]
 
 [package]
 name = "resonantdust-shared"
@@ -19,7 +19,8 @@ default = []
 js = ["dep:wasm-bindgen", "dep:serde_json"]
 
 [dependencies]
-resonantdust-data = { path = "data" }
+resonantdust-codec = { path = "codec" }
+resonantdust-dsl = { path = "dsl" }
 wasm-bindgen = { version = "0.2", optional = true }
 # JSON marshalling for the browser boundary only (the plain logic stays typed).
 serde_json = { version = "1", optional = true }

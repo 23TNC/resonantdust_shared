@@ -26,7 +26,9 @@ pub struct Iter {
   /// equipment-chain iterator. Two refs with the same parent + branch share an
   /// iterator (the offset distinguishes the cell).
   pub parent: String,
-  /// Branch / stack selector (`0` hex, `1` top, `2` bottom — content's choice).
+  /// Branch / stack selector = `stack_id` (`1` hex/tile, `2` top, `3` bottom).
+  /// `0` is the chain root (`slot.0.0`), filled by the `root` param — never an
+  /// iterator (skipped in [`iterators`]).
   pub branch: u8,
 }
 
@@ -78,7 +80,12 @@ fn resolve_path(path: &str, iters: &mut Vec<Iter>) {
     if segs[i] == "slot" && i + 2 < segs.len() {
       if let (Ok(branch), Ok(offset)) = (segs[i + 1].parse::<u16>(), segs[i + 2].parse::<u32>()) {
         if branch <= 255 {
-          find_or_create(iters, prefix.clone(), branch as u8);
+          // Branch 0 (`slot.0.X`) is the chain root — a single card filled by the
+          // `root` param, not a sliding-window iterator. Walk past it (so nested
+          // `slot.0.0.…` paths still resolve) but register no iterator.
+          if branch != 0 {
+            find_or_create(iters, prefix.clone(), branch as u8);
+          }
           append(&mut prefix, &format!("slot.{branch}.{offset}"));
           i += 3;
           continue;
@@ -105,6 +112,52 @@ fn find_or_create(iters: &mut Vec<Iter>, parent: String, branch: u8) -> u32 {
   (iters.len() - 1) as u32
 }
 
+/// The card defs a magnet must pull onto itself to satisfy `recipe`: one
+/// `(branch, offset, packed_def)` per top-level non-root input slot that pins a
+/// def via `$card::X *slot.<branch>.<offset>.def_id eq`. Skips the root
+/// (`branch 0` = the magnet), holds, and nested-owner slots — the V1 magnetic
+/// gather selects candidates by def-id at the top level (despair → 1×dread,
+/// strike → 3×corpus). `None`-resolving names are dropped.
+pub fn required_input_defs(bundle: &Bundle, recipe: &Node) -> Vec<(u8, u32, u16)> {
+  let mut out = Vec::new();
+  let Some(input) = recipe.hook("input") else {
+    return out;
+  };
+  for stmt in &input.body {
+    let Stmt::Instr(toks) = stmt else { continue };
+    let mut slot: Option<(u8, u32)> = None;
+    let mut name: Option<&str> = None;
+    for tok in toks {
+      match tok {
+        // `*slot.<branch>.<offset>.def_id` — top level only (4 segments).
+        Token::Value(p) => {
+          let segs: Vec<&str> = p.split('.').collect();
+          if segs.len() == 4 && segs[0] == "slot" && segs[3] == "def_id" {
+            if let (Ok(b), Ok(o)) = (segs[1].parse::<u8>(), segs[2].parse::<u32>()) {
+              slot = Some((b, o));
+            }
+          }
+        }
+        // `$card::<name>`.
+        Token::Const(c) => {
+          if let Some(n) = c.strip_prefix("card::") {
+            name = Some(n);
+          }
+        }
+        _ => {}
+      }
+    }
+    if let (Some((b, o)), Some(n)) = (slot, name) {
+      if b != 0 {
+        if let Some(def) = bundle.packed_def(n) {
+          out.push((b, o, def));
+        }
+      }
+    }
+  }
+  out
+}
+
 /// An assembled operating-set frame: the [`Store`] the vm matches/plans against,
 /// plus the `slot-path → card_id` map for translating the resulting
 /// slot-path-keyed [`crate::vm::Plan`] back to concrete cards.
@@ -112,7 +165,7 @@ pub struct Frame {
   /// The positioned frame — `card_view`s written at their slot paths, nested for
   /// owner re-anchors. Pass to `match_recipe` / `plan_recipe`.
   pub store: Store,
-  /// Every directly-placed card's `(slot-path, card_id)`, plus `("root", root)`.
+  /// Every directly-placed card's `(slot-path, card_id)`, plus `("slot.0.0", root)`.
   /// Back-translation looks a Plan's slot path up here; effect targets that walk
   /// past a placed card (`…owner.inventory`) resolve the longest placed prefix
   /// here and let the caller walk the snapshot remainder.
@@ -140,9 +193,9 @@ impl Frame {
 
 /// Assemble the operating-set frame from positional `bindings`. For each
 /// iterator (in legacy order) and offset, place the bound card's [`card_view`]
-/// at its DSL slot path; the `slot.0.0` sentinel (`card_id == 0`, top-level
-/// branch 0) takes the `synthetic` tile view instead; `root` is placed at
-/// `root`. `lookup` resolves a `card_id` to its typed [`Card`] (the gate bridges
+/// at its DSL slot path; the `slot.1.0` sentinel (`card_id == 0`, top-level
+/// branch 1) takes the `synthetic` tile view instead; `root` is placed at
+/// `slot.0.0`. `lookup` resolves a `card_id` to its typed [`Card`] (the gate bridges
 /// stored rows → `Card` here, incl. the legacy-id → name decode during the
 /// transition). Iterators are parent-before-child, so nested owner paths nest
 /// cleanly into their already-written parent.
@@ -162,8 +215,9 @@ pub fn build_frame(
     for (offset, &card_id) in row.iter().enumerate() {
       let path = iter.path(offset as u32);
       if card_id == 0 {
-        // synthetic-tile sentinel: the top-level branch-0 / offset-0 slot.
-        if iter.parent.is_empty() && iter.branch == 0 && offset == 0 {
+        // synthetic-tile sentinel: the tile is the hex member at `slot.1.0`
+        // (stack 1), the top-level branch-1 / offset-0 slot.
+        if iter.parent.is_empty() && iter.branch == 1 && offset == 0 {
           if let Some(tile) = synthetic {
             store.write(&path, card_view(bundle, tile));
           }
@@ -179,8 +233,8 @@ pub fn build_frame(
 
   if root != 0 {
     if let Some(card) = lookup(root) {
-      store.write("root", card_view(bundle, &card));
-      paths.push(("root".to_string(), root));
+      store.write("slot.0.0", card_view(bundle, &card));
+      paths.push(("slot.0.0".to_string(), root));
     }
   }
 
@@ -228,19 +282,19 @@ mod tests {
 
   #[test]
   fn cut_tree_nested_equipment_iterator() {
-    // slot.0.0 (tile), slot.1.0 (actor), slot.1.0.owner.slot.1.0 (axe in the
-    // actor's owner's branch 1) → 3 iterators, the nested one parented on
-    // "slot.1.0.owner". Mirrors recipe_tape::nested_iterator_for_equipment_chain.
+    // slot.1.0 (tile / hex member), slot.2.0 (actor, top), slot.2.0.owner.slot.2.0
+    // (axe in the actor's owner's top stack) → 3 iterators, the nested one
+    // parented on "slot.2.0.owner". Mirrors recipe_tape::nested_iterator_for_equipment_chain.
     let iters = iters_of(
-      "      *slot.0.0.aspect.wood 1 ge if &slot.0.0 use\n\
-       \x20     *slot.1.0.aspect.corpus_lit 1 ge if &slot.1.0 claim\n\
-       \x20     $card::axe *slot.1.0.owner.slot.1.0.def_id eq if &slot.1.0.owner.slot.1.0 share\n",
+      "      *slot.1.0.aspect.wood 1 ge if &slot.1.0 use\n\
+       \x20     *slot.2.0.aspect.corpus_lit 1 ge if &slot.2.0 claim\n\
+       \x20     $card::axe *slot.2.0.owner.slot.2.0.def_id eq if &slot.2.0.owner.slot.2.0 share\n",
       "",
     );
-    assert_eq!(iters, vec![it("", 0), it("", 1), it("slot.1.0.owner", 1)]);
+    assert_eq!(iters, vec![it("", 1), it("", 2), it("slot.2.0.owner", 2)]);
     // and the nested iterator's path round-trips to the source reference
-    assert_eq!(iters[2].path(0), "slot.1.0.owner.slot.1.0");
-    assert_eq!(iters[1].path(0), "slot.1.0");
+    assert_eq!(iters[2].path(0), "slot.2.0.owner.slot.2.0");
+    assert_eq!(iters[1].path(0), "slot.2.0");
   }
 
   #[test]
@@ -262,7 +316,12 @@ mod tests {
 
   #[test]
   fn root_only_recipe_has_no_iterators() {
-    let iters = iters_of("      *root.aspect.fleeting 1 ge if &root borrow\n", "      &root destroy\n");
+    // The root is `slot.0.0` (branch 0) — filled by the `root` param, never an
+    // iterator; a root-only recipe enumerates to nothing.
+    let iters = iters_of(
+      "      *slot.0.0.aspect.fleeting 1 ge if &slot.0.0 borrow\n",
+      "      &slot.0.0 destroy\n",
+    );
     assert_eq!(iters, Vec::<Iter>::new());
   }
 
@@ -291,9 +350,9 @@ mod tests {
   fn frame_places_binding_and_matches_then_translates_back() {
     let b = bundle();
     let r = recipe_node(
-      "<recipe>\n  ::r>\n    @input>\n      $card::corpus *slot.1.0.def_id eq if &slot.1.0 use\n    @output>\n      &slot.1.0 destroy\n",
+      "<recipe>\n  ::r>\n    @input>\n      $card::corpus *slot.2.0.def_id eq if &slot.2.0 use\n    @output>\n      &slot.2.0 destroy\n",
     );
-    // iterator 0 = branch 1; bind card 101 (a corpus) at offset 0.
+    // iterator 0 = branch 2 (top); bind card 101 (a corpus) at offset 0.
     let corpus = card_of(&b, "corpus");
     let lookup = |id: u32| (id == 101).then(|| corpus.clone());
     let frame = build_frame(&b, &r, 0, &[vec![101]], None, &lookup);
@@ -303,20 +362,20 @@ mod tests {
     let plan =
       match_recipe(&r.hook("input").unwrap().body, &mut store, &b.catalog, &b.functions).unwrap();
     assert!(plan.matched);
-    assert_eq!(plan.holds, vec![("slot.1.0".to_string(), Hold::Use)]);
+    assert_eq!(plan.holds, vec![("slot.2.0".to_string(), Hold::Use)]);
     // and the hold's slot-path translates back to the bound card_id
     let frame2 = build_frame(&b, &r, 0, &[vec![101]], None, &lookup);
-    assert_eq!(frame2.card_at("slot.1.0"), Some(101));
+    assert_eq!(frame2.card_at("slot.2.0"), Some(101));
   }
 
   #[test]
   fn under_filled_recipe_does_not_match() {
-    // A 2-corpus recipe (slot.1.0 + slot.1.1) must NOT match when only one
-    // card is bound — the absent slot.1.1 must fail its `def_id eq`, not
+    // A 2-corpus recipe (slot.2.0 + slot.2.1) must NOT match when only one
+    // card is bound — the absent slot.2.1 must fail its `def_id eq`, not
     // spuriously pass (regression: `corpus_b_top` firing on a single corpus).
     let b = bundle();
     let r = recipe_node(
-      "<recipe>\n  ::r>\n    @input>\n      $card::corpus *slot.1.0.def_id eq if &slot.1.0 use\n      $card::corpus *slot.1.1.def_id eq if &slot.1.1 claim\n    @output>\n      &slot.1.0 destroy\n",
+      "<recipe>\n  ::r>\n    @input>\n      $card::corpus *slot.2.0.def_id eq if &slot.2.0 use\n      $card::corpus *slot.2.1.def_id eq if &slot.2.1 claim\n    @output>\n      &slot.2.0 destroy\n",
     );
     let corpus = card_of(&b, "corpus");
     let one = |id: u32| (id == 101).then(|| corpus.clone());
@@ -335,9 +394,9 @@ mod tests {
   fn frame_nests_owner_reanchor() {
     let b = bundle();
     let r = recipe_node(
-      "<recipe>\n  ::r>\n    @input>\n      $card::axe *slot.1.0.owner.slot.1.0.def_id eq if &slot.1.0.owner.slot.1.0 share\n    @output>\n      $card::corpus &slot.1.0.owner.inventory create\n",
+      "<recipe>\n  ::r>\n    @input>\n      $card::axe *slot.2.0.owner.slot.2.0.def_id eq if &slot.2.0.owner.slot.2.0 share\n    @output>\n      $card::corpus &slot.2.0.owner.inventory create\n",
     );
-    // iter 0 = branch 1 (actor, from the owner-path prefix); iter 1 = nested axe.
+    // iter 0 = branch 2 (actor, from the owner-path prefix); iter 1 = nested axe.
     let (actor, axe) = (card_of(&b, "corpus"), card_of(&b, "axe"));
     let lookup = |id: u32| match id {
       201 => Some(actor.clone()),
@@ -351,13 +410,13 @@ mod tests {
     let plan =
       match_recipe(&r.hook("input").unwrap().body, &mut store, &b.catalog, &b.functions).unwrap();
     assert!(plan.matched);
-    assert_eq!(plan.holds, vec![("slot.1.0.owner.slot.1.0".to_string(), Hold::Share)]);
+    assert_eq!(plan.holds, vec![("slot.2.0.owner.slot.2.0".to_string(), Hold::Share)]);
 
     // back-translation: exact placement + an effect target that walks past one
-    assert_eq!(frame.card_at("slot.1.0.owner.slot.1.0"), Some(301));
+    assert_eq!(frame.card_at("slot.2.0.owner.slot.2.0"), Some(301));
     assert_eq!(
-      frame.longest_prefix("slot.1.0.owner.inventory"),
-      Some(("slot.1.0", 201, ".owner.inventory"))
+      frame.longest_prefix("slot.2.0.owner.inventory"),
+      Some(("slot.2.0", 201, ".owner.inventory"))
     );
   }
 }
